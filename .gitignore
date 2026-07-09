@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 .venv/
 runs/*/tmp/
+.env
+*.env
+secrets*
+runs/
+*/runs/
+.test_runs/

@@ -50,6 +50,30 @@ moving it is recorded with the reason.
    format. Decision: pass the previous attempt's `compile.json` errors (structured) plus the raw
    compiler output, and for informal reprompt after 3 failed translations, §9's fixed sentence.
 
+## Phase 2 — build + live-run findings (2026-07-09)
+
+Key handling: OpenRouter key stored at `~/.midas-mvp.env` (chmod 600) **outside the repo tree**;
+`.gitignore` blocks `.env`/`*.env`; a `sk-or-` leak scan runs before every push (clean).
+
+Live smoke run of `problems/toy` (gpt-5 + claude-sonnet-5 via OpenRouter) → **final_success** in
+~40 s, 5 LLM calls, 3 lean attempts, 9 compiles. Findings:
+1. **gpt-5 is a reasoning model** — needs a large `max_tokens` (small budgets return EMPTY content;
+   confirmed 20 tokens→'', 3000→'pong' w/ 64 reasoning tokens). Reasoning agent set to 16000.
+2. **Latency / hang risk.** The first live attempt ran >2 min before I killed it; the retry finished
+   in 40 s. Added `timeout=180s, max_retries=2` to the client so a hung upstream call can't stall the
+   loop. Still: a full multi-step Mathlib run could be slow; watch `max_runtime_seconds`.
+3. **Real `body_failed` caught + recovered.** Model emitted `simp only [A,B]` (which *closed* the
+   goal) then a stray `sorry` → compiler `"No goals to be solved"` → body_failed; retry with
+   compiler feedback produced `dsimp` and succeeded. The retry-with-feedback path works on real output.
+4. **Parser survived real output** — no `format_failed` on genuine model output in this run (the
+   top-priority surface held; Phase 4 on harder problems will test it more).
+5. **Toy under-exercises the lemma path.** Both accepted steps had *empty* NEW DECLARATIONS (the model
+   proved directly in the body), so the declaration-delta / lemma-first path wasn't hit live. Phase 3
+   problems 2–3 (genuine reusable lemmas) are needed to exercise it. Also: comment-only "empty" deltas
+   get appended verbatim in reconstruction (harmless duplicate comments) — candidate cleanup later.
+6. §12 unenforced weakness (axiom/unsafe/native_decide) — none appeared; the only `sorry` is in an
+   intermediate accepted body (`ps001`), which is expected, not a violation. Phase 4 report will scan.
+
 ## Phase 1 judgment calls (implemented)
 - Toy `context.lean` uses no imports (`prelude=[]`), so every compile is a fresh core-only `lean`
   (~0.3–0.6 s). `A = 2+3`, `B = 15/3` (both 5, structurally different), `f n = n*n`; target

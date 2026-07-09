@@ -15,9 +15,9 @@ class Config(BaseModel):
     max_total_lean_attempts: int = 300
     max_runtime_seconds: int = 3600
     lean_prelude: List[str] = Field(default_factory=list)   # full Lean lines, not module names
-    # not in the spec's example but referenced by §9/§10 — model ids, overridable
-    reasoning_model: str = "gpt-5"
-    translation_model: str = "claude-sonnet-5"
+    # not in the spec's example but referenced by §9/§10 — OpenRouter model slugs, overridable
+    reasoning_model: str = "openai/gpt-5"
+    translation_model: str = "anthropic/claude-sonnet-5"
 
 
 # ---------------- compile.json (§19) ----------------
