@@ -2,7 +2,7 @@
 """
 midas-mvp CLI (SPEC Phase 5). Usable without reading source:
 
-  python3 -m midas.cli run <problem_dir>
+  python3 -m midas.cli run <problem>          # id or dir: p4_n5_30  OR  problems/p4_n5_30
   python3 -m midas.cli status <problem_id>
   python3 -m midas.cli attempts <problem_id> [--step N] [--failed-only]
   python3 -m midas.cli show <problem_id> <step> <candidate> <attempt>
@@ -20,8 +20,23 @@ from midas.artifacts import StateManager, Paths
 from midas.models import ProofRunState
 
 
-def _run_root(args, pid):
-    return os.path.join(os.path.abspath(args.runs_root), pid)
+def _pid(arg):
+    """Normalize a problem argument to its id, so an id OR a path both work
+    (`p4_n5_30` and `problems/p4_n5_30` are equivalent everywhere)."""
+    return os.path.basename(arg.rstrip("/"))
+
+
+def _run_root(args, problem):
+    return os.path.join(os.path.abspath(args.runs_root), _pid(problem))
+
+
+def _resolve_problem_dir(arg):
+    """For `run`: accept an id or a path. Look for <arg>/ then problems/<arg>/."""
+    for c in (arg, os.path.join("problems", _pid(arg))):
+        if os.path.isdir(c) and os.path.exists(os.path.join(c, "config.json")):
+            return os.path.abspath(c)
+    sys.exit(f"problem not found: {arg!r} — looked for '{arg}/config.json' and "
+             f"'problems/{_pid(arg)}/config.json' (run from the repo root)")
 
 
 def _load_state(root) -> ProofRunState:
@@ -35,7 +50,7 @@ def cmd_run(args):
     if not os.environ.get("OPENROUTER_API_KEY"):
         print("warning: OPENROUTER_API_KEY not set — live agents will fail. `source ~/.midas-mvp.env`",
               file=sys.stderr)
-    state = run_problem(args.problem_dir, runs_root=os.path.abspath(args.runs_root))
+    state = run_problem(_resolve_problem_dir(args.problem_dir), runs_root=os.path.abspath(args.runs_root))
     print(f"{state.problem_id}: {state.status}"
           + (f" ({state.failure_reason})" if state.failure_reason else "")
           + f"  | accepted={state.stats.accepted_proof_steps} llm={state.stats.total_llm_calls} "
@@ -145,8 +160,10 @@ def main(argv=None):
     ap.add_argument("--runs-root", default="runs", help="directory holding run outputs (default: runs)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("run", help="run the loop on a problem directory")
-    r.add_argument("problem_dir"); r.set_defaults(fn=cmd_run)
+    r = sub.add_parser("run", help="run the loop on a problem (id or dir)")
+    r.add_argument("problem_dir", metavar="problem",
+                   help="problem id or directory, e.g. p4_n5_30 or problems/p4_n5_30")
+    r.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("status", help="show a run's status + step summary")
     s.add_argument("problem_id"); s.set_defaults(fn=cmd_status)
