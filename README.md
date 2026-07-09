@@ -43,48 +43,72 @@ end). Only accepted artifacts are used to reconstruct the final proof.
 
 ---
 
-## Prerequisites
+## Setup & running
 
-1. **Lean 4 via elan** (`lean-toolchain` pins `leanprover/lean4:v4.31.0`; elan installs it):
-   ```bash
-   curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
-   source "$HOME/.elan/env"; elan --version
-   ```
-   The current problems are **Core/Std only — no Mathlib**, so every compile is ~0.3–0.6 s and
-   nothing else needs installing on the Lean side.
+> ⚠️ **Run every command from the repo root** — the `midas-mvp/` folder that contains `midas/`.
+> `python3 -m midas.cli` imports the `midas` package from the current directory; from anywhere else
+> you get `ModuleNotFoundError: No module named 'midas'`. This is the #1 setup gotcha.
 
-2. **Python 3.9+** with:
-   ```bash
-   pip install pydantic openai
-   ```
-   (`openai` is used for *all* calls — both models route through OpenRouter's OpenAI-compatible API.)
-
-3. **An OpenRouter API key** (for live `run`s only — the verifier and offline tests need no key).
-   Store it **outside the repo** so it can never be committed:
-   ```bash
-   echo "export OPENROUTER_API_KEY='sk-or-...'" > ~/.midas-mvp.env && chmod 600 ~/.midas-mvp.env
-   ```
-
----
-
-## Quickstart
-
+**1. Install Lean 4 (via elan) — one time.** `lean-toolchain` pins `leanprover/lean4:v4.31.0`.
 ```bash
-git clone https://github.com/soilmilk/midas-mvp.git && cd midas-mvp
+curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
+source "$HOME/.elan/env"        # or restart the shell
+```
 
-# 1. sanity-check the verifier and the offline loop (NO API key needed)
-python3 verifier/run_phase1.py          # verifier gate: 3 checkpoints + a negative test
-python3 tests/test_offline.py           # deterministic pipeline on canned outputs
-python3 tests/test_loop_offline.py      # full loop offline (retry -> final_success)
+**2. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
+OpenRouter's OpenAI-compatible API.
+```bash
+pip install pydantic openai
+```
 
-# 2. run a real problem (needs the key)
+**3. Clone, and install the toolchain on first `lean` call.**
+```bash
+git clone https://github.com/soilmilk/midas-mvp.git
+cd midas-mvp                    # <-- run everything below from here
+lean --version                  # first run downloads Lean v4.31.0 (one-time). Must print 4.31.0
+```
+
+**4. Add your OpenRouter key** (each person uses their own; it is never committed — only `run` needs it).
+```bash
+echo "export OPENROUTER_API_KEY='sk-or-...'" > ~/.midas-mvp.env && chmod 600 ~/.midas-mvp.env
+```
+
+**5. Verify the install — NO key needed** (proves Lean + Python are wired up correctly).
+```bash
+python3 verifier/run_phase1.py       # must end: PHASE 1 GATE: PASS
+python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
+python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
+```
+
+**6. Run a real proof** (the Core/Std problems need only the key).
+```bash
 source ~/.midas-mvp.env
 python3 -m midas.cli run problems/p1_sanity
-
-# 3. inspect the run (no key needed)
 python3 -m midas.cli status p1_sanity
-python3 -m midas.cli attempts p1_sanity
 ```
+
+### Running a Mathlib problem
+The bundled problems are **Core/Std — no Mathlib**. A problem whose `config.json` puts `import Mathlib…`
+in `lean_prelude` **also needs Mathlib on `LEAN_PATH`**, or you'll get `unknown module prefix 'Mathlib'`
+(a clean `context_failed`, not a crash). Point at a **prebuilt v4.31.0 Mathlib** (must match
+`lean-toolchain`), then run:
+```bash
+export LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env printenv LEAN_PATH)"
+source ~/.midas-mvp.env
+python3 -m midas.cli run problems/<mathlib_problem>
+```
+With the default `fresh` backend, every checkpoint cold-compiles Mathlib (~seconds each) — slow over
+many steps. For heavy Mathlib work, switch to the **warm backend** ([INTEGRATION.md](INTEGRATION.md)).
+
+### Troubleshooting
+| symptom | cause | fix |
+|---|---|---|
+| `No module named 'midas'` | not in the repo root | `cd` into `midas-mvp` (the folder with `midas/`) and run from there — **the most common issue** |
+| `No module named 'pydantic'` / `'openai'` | deps missing | `pip install pydantic openai` |
+| `lean: command not found` / wrong version | elan not set up / not on PATH | rerun the elan installer, `source "$HOME/.elan/env"`, then `lean --version` inside the repo |
+| warning `OPENROUTER_API_KEY not set`, then live calls fail | key not loaded | `source ~/.midas-mvp.env` in the *same* shell (your own key) |
+| run ends `failed (context_failed)`, error `unknown module prefix 'Mathlib'` | a Mathlib problem with no Mathlib on `LEAN_PATH` | `export LEAN_PATH=…` (see "Running a Mathlib problem"); ensure that Mathlib is **v4.31.0** |
+| seems to hang on a call | OpenRouter throttling (account tier) | the loop caps each call by the remaining runtime budget; raise your tier or lower `reasoning_effort` |
 
 ---
 
