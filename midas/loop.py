@@ -115,6 +115,9 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         prob.informal_problem, prob.context, prob.body_initial)
 
     start = _now()
+    deadline = start + prob.config.max_runtime_seconds
+    def call_timeout():   # bound every LLM call by the remaining budget so no single call blows it
+        return max(2.0, min(150.0, deadline - _now()))
     limits = LimitController(prob.config, start)
     failures = FailureController(logger)
     category_counts: dict = {}
@@ -168,9 +171,21 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         for j in range(1, prob.config.max_informal_candidates_per_proof_step + 1):
             ic = InformalCandidate(informal_candidate_index=j)
             ps.informal_candidates.append(ic)
-            r = reasoning.propose(prob.informal_problem, informal_progress, state.current_knowledge,
-                                  prob.context, _accepted_summary(accepted_decls), latest_body,
-                                  failure_feedback=reasoning_feedback, attempt_index=j - 1)
+            if _now() >= deadline:
+                failures.write(state, "max_runtime_seconds", _env_text(prelude, prob.context, accepted_decls),
+                               latest_body, last_error, category_counts)
+                return finish()
+            try:
+                r = reasoning.propose(prob.informal_problem, informal_progress, state.current_knowledge,
+                                      prob.context, _accepted_summary(accepted_decls), latest_body,
+                                      failure_feedback=reasoning_feedback, attempt_index=j - 1,
+                                      timeout=call_timeout())
+            except Exception as e:                          # timeout / API error — don't crash
+                state.stats.total_llm_calls += 1
+                last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
+                bump("reasoning_call_failed"); ic.status = "abandoned"
+                reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
+                statemgr.save(state); continue
             state.stats.total_llm_calls += 1
             informal_candidate = _extract_informal(r.text)
             logger.write_reasoning(i, j, r.prompt, r.text)
@@ -186,9 +201,17 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    latest_body, last_error, category_counts)
                     return finish()
 
-                t = translation.translate(header, prob.context, _accepted_summary(accepted_decls),
-                                          latest_body, informal_candidate,
-                                          compiler_feedback=compiler_feedback, attempt_index=k - 1)
+                try:
+                    t = translation.translate(header, prob.context, _accepted_summary(accepted_decls),
+                                              latest_body, informal_candidate,
+                                              compiler_feedback=compiler_feedback, attempt_index=k - 1,
+                                              timeout=call_timeout())
+                except Exception as e:                      # timeout / API error — don't crash
+                    state.stats.total_llm_calls += 1
+                    last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
+                    bump("translation_call_failed")
+                    compiler_feedback = "The previous translation call did not return; keep the output short."
+                    statemgr.save(state); continue
                 state.stats.total_llm_calls += 1
                 state.stats.total_lean_attempts += 1
                 la = LeanTranslationAttempt(lean_translation_attempt_index=k)

@@ -87,6 +87,19 @@ goals directly in the body, skipping the declaration delta):
 Input gate (no LLM): all three pass context check + initial-body check + header extraction;
 reference solutions compile. Phase 4 will run them live.
 
+## Robustness fix — runtime budget was not enforced during LLM calls (2026-07-09)
+Found while testing extra proofs (t1_cube): a single throttled gpt-5 call ran **18 min** on a 300 s
+budget, because `max_runtime_seconds` was only checked *between* LLM calls, and the SDK's
+`timeout=180 × max_retries=2` could stack. The run failed with `max_runtime_seconds` but 0 attempts
+after 1072 s. Root cause was upstream OpenRouter throttling (tier-dependent), but the loop let it
+blow the budget. **Fix:** every LLM call is now bounded by the remaining budget
+(`timeout = min(150, deadline − now)`), a deadline is checked before the reasoning call, timeouts/API
+errors are **caught** (→ `reasoning_call_failed` / `translation_call_failed`, never a crash), and the
+client is `timeout=120, max_retries=1`. Bounded re-run: t1_cube `final_success` in 74.5 s (budget 180).
+Extra regression proofs added (all pass loop+verifier, replay-confirmed, final compiles clean):
+t1_cube, t2_list, t3_bool, t4_le (+ p1_sanity). Note: `reasoning_effort=minimal` is too shallow even
+for `by decide` goals (t1 flailed on minimal, closed on low).
+
 ## Phase 5 — CLI (2026-07-09)
 midas/cli.py: run/status/attempts/show/replay (argparse). `replay` recompiles one checkpoint
 via the verifier only (no LLM). `attempts` shows a declarations? column that surfaces the

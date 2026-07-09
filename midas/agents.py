@@ -23,8 +23,10 @@ def _client():
         raise RuntimeError("OPENROUTER_API_KEY not set (source ~/.midas-mvp.env). "
                            "Live agents need it; use offline_responses for dry runs.")
     from openai import OpenAI
-    # request timeout + retries so a slow/hung upstream call can't stall the loop indefinitely
-    return OpenAI(base_url=OPENROUTER_BASE, api_key=key, timeout=180.0, max_retries=2)
+    # request timeout + limited retries so a slow/throttled upstream call can't stall the loop.
+    # max_retries=1 keeps rate-limit backoff from stacking (2x180s instead of 3x). The loop also
+    # passes a per-call `timeout` bounded by the remaining runtime budget (see loop.py).
+    return OpenAI(base_url=OPENROUTER_BASE, api_key=key, timeout=120.0, max_retries=1)
 
 
 @dataclass
@@ -36,10 +38,13 @@ class LLMResult:
     completion_tokens: int = 0
 
 
-def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None) -> LLMResult:
+def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None,
+          timeout: float = None) -> LLMResult:
     kw = dict(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=max_tokens)
     if reasoning_effort:                       # only for reasoning models (gpt-5); big latency lever
         kw["reasoning_effort"] = reasoning_effort
+    if timeout is not None:                    # per-call bound (loop caps by remaining runtime budget)
+        kw["timeout"] = timeout
     r = _client().chat.completions.create(**kw)
     u = r.usage
     return LLMResult(prompt, (r.choices[0].message.content or "").strip(), r.model,
@@ -79,12 +84,13 @@ class ReasoningAgent:
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
-    def propose(self, *args, attempt_index: int = 0, **kw) -> LLMResult:
+    def propose(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
         prompt = self.build_prompt(*args, **kw)
         if self.offline is not None:                       # sequential canned queue
             text = self.offline.pop(0) if self.offline else ""
             return LLMResult(prompt, text, self.model + "[offline]")
-        return _call(self.model, prompt, self.max_tokens, reasoning_effort=self.reasoning_effort)
+        return _call(self.model, prompt, self.max_tokens,
+                     reasoning_effort=self.reasoning_effort, timeout=timeout)
 
 
 # ---------------- TranslationAgent (§10) ----------------
@@ -119,9 +125,9 @@ class TranslationAgent:
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
-    def translate(self, *args, attempt_index: int = 0, **kw) -> LLMResult:
+    def translate(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
         prompt = self.build_prompt(*args, **kw)
         if self.offline is not None:                       # sequential canned queue
             text = self.offline.pop(0) if self.offline else ""
             return LLMResult(prompt, text, self.model + "[offline]")
-        return _call(self.model, prompt, self.max_tokens)
+        return _call(self.model, prompt, self.max_tokens, timeout=timeout)
