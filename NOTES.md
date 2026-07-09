@@ -74,6 +74,19 @@ Live smoke run of `problems/toy` (gpt-5 + claude-sonnet-5 via OpenRouter) → **
 6. §12 unenforced weakness (axiom/unsafe/native_decide) — none appeared; the only `sorry` is in an
    intermediate accepted body (`ps001`), which is expected, not a violation. Phase 4 report will scan.
 
+## Phase 3 — test problems (2026-07-09)
+Three problems, Core/Std only, each with a compiled reference solution proving it's solvable.
+Designed so difficulty AND lemma-path pressure increase (the toy showed the model proves easy
+goals directly in the body, skipping the declaration delta):
+- **p1_sanity** — `sq 3 = 9`. One step (`decide`). Sanity; `reasoning_effort=minimal`.
+- **p2_lemma** — `sumAcc n 0 = sumTo n`. FORCES one genuine reusable lemma: direct induction on
+  `main` is too weak; the model must discover the GENERALIZED `sumAcc n a = sumTo n + a` and
+  specialize it. `reasoning_effort=low`.
+- **p3_imo** — `f (dblA n) = f (dblB n)`, IMO-shaped: A recursive, B closed-form, f applied to both.
+  Needs a separate (inductive) lemma about A and a lemma about B, combined at the end. `medium`.
+Input gate (no LLM): all three pass context check + initial-body check + header extraction;
+reference solutions compile. Phase 4 will run them live.
+
 ## Hang investigation (2026-07-09) — measured
 
 The >2 min "hang" was **not** a stuck loop or a Lean issue. Measured per-call latency (OpenRouter):
