@@ -205,6 +205,7 @@ change (structurally, not just in prompts).
 SPEC.md*                    the design doc (external; not committed)
 README.md                   this file
 HANDOFF.md                  how the team trains/evolves it (metaoptimizing loop)
+INTEGRATION.md              how midas_proof_verifier plugs in as the warm verifier backend
 NOTES.md                    spec-review ambiguities + all build/run findings
 PHASE4_REPORT.md            results of the 3 live runs
 LEMMA_FIRST_ANALYSIS.md     why lemma-first is skipped + fixes
@@ -222,11 +223,14 @@ tests/                      offline pipeline + offline loop tests (no API key)
 
 ## Notes on scope
 
-- **Fresh `lean` per checkpoint** is a deliberate choice (fast for Core/Std). A warm/persistent
-  verifier backend — needed if you switch to a Mathlib prelude, where every cold `import Mathlib`
-  costs ~15–40 s — is a future swap behind the same `VerifierClient` interface (see the sibling
-  `midas_proof_verifier` project). Not built here.
-- **Mathlib:** set `lean_prelude` to `["import Mathlib", ...]` and point `LEAN_PATH` at a prebuilt
-  Mathlib; expect each checkpoint to take tens of seconds with the current fresh-compile backend.
+- **Pluggable verifier backend.** `VerifierClient` runs the §14 checkpoint semantics through a
+  swappable `VerifierBackend`: `fresh` (default — a `lean` subprocess per checkpoint, fast for
+  Core/Std) or `warm` (routes to the sibling **`midas_proof_verifier`** warm server, which keeps
+  Mathlib resident and pays `import Mathlib` once). Select with `config.verifier_backend`. The warm
+  adapter is built but **experimental/unvalidated** (only matters for a Mathlib prelude) — see
+  **[INTEGRATION.md](INTEGRATION.md)**.
+- **Mathlib:** set `lean_prelude` to `["import Mathlib", ...]`, switch `verifier_backend` to `"warm"`,
+  and point it at a built `midas_proof_verifier` warm exe + Mathlib `LEAN_PATH` (INTEGRATION.md).
+  With the `fresh` backend, a Mathlib checkpoint takes tens of seconds each.
 - The **Metaoptimizer agent itself** (SPEC §20) is out of MVP scope — the loop logs everything it
   would consume; `HANDOFF.md` describes building it.

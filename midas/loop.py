@@ -12,7 +12,7 @@ from .problem import load_problem, InputValidator, Problem
 from .agents import ReasoningAgent, TranslationAgent
 from .parser import parse_translator_output
 from .structure import (extract_header, check_structure, body_contains_sorry, declared_names)
-from .verifier_client import VerifierClient, build_compile_json
+from .verifier_client import VerifierClient, make_verifier, build_compile_json
 from .reconstructor import reconstruct
 from .artifacts import Paths, LeanArtifactLogger, StateManager
 
@@ -103,7 +103,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     paths = Paths(runs_root, prob.problem_id)
     logger = LeanArtifactLogger(paths)
     statemgr = StateManager(paths)
-    verifier = VerifierClient()
+    verifier = make_verifier(prob.config)   # "fresh" (default) or "warm" (midas_proof_verifier)
 
     state = ProofRunState(
         problem_id=prob.problem_id,

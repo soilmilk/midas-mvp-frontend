@@ -1,0 +1,111 @@
+"""
+WarmTxnBackend — routes midas-mvp's checkpoint checks to the sibling `midas_proof_verifier`
+warm server (the `warm` executable), which keeps Mathlib resident and pays `import Mathlib` ONCE.
+
+WHY: with a Mathlib prelude, FreshCompileBackend re-pays ~15–40 s per checkpoint. The warm server
+loads Mathlib once (~15–40 s) then verifies each block in ~10–500 ms — measured break-even ≈ 2
+checkpoints (see midas_proof_verifier and the checkpoint-validation timings).
+
+HOW: one long-lived `warm` process; each `check()` submits the assembled block(s) over stdin and
+reads the verdict. The `warm` (stateless) verifier gates each block against resident Mathlib, which
+matches this backend's stateless `check()` (the loop passes `accepted_declarations` forward itself).
+
+  declaration check : context + accepted + candidate_declaration  → expect ACCEPT
+  body check        : + candidate_body                            → ACCEPT (closed) / OPEN (sorry)
+
+⚠️ EXPERIMENTAL — UNVALIDATED. This adapter is the documented integration point (INTEGRATION.md),
+not a validated path. It has NOT been run end-to-end (the current problems are Core/Std, so nothing
+exercises a Mathlib prelude). Before relying on it: (1) point `config.warm_binary` /
+`config.warm_lean_path` at a built `midas_proof_verifier` warm exe + a Mathlib LEAN_PATH;
+(2) run a Mathlib-prelude problem and check the verdicts against FreshCompileBackend on a shared
+core case; (3) recommended hardening — have `warm` print a per-response sentinel line (e.g. `%%DONE`)
+so response boundaries don't rely on scanning for the next `[node …]` line.
+"""
+from __future__ import annotations
+import os, re, subprocess, time
+from dataclasses import asdict
+
+from verifier.checkpoint_builder import CheckpointResult, CheckResult, CompileResult, Diag
+
+_NODE = re.compile(r"\[node \d+\]\s+\d+\s*ms\s+(.*)")
+
+
+def _diag(msg: str):
+    return asdict(Diag("<warm>", 0, 0, "error", "", msg.strip()[:300]))
+
+
+class WarmTxnBackend:
+    def __init__(self, config):
+        binary = config.warm_binary or os.environ.get("MIDAS_WARM_BINARY", "")
+        lean_path = config.warm_lean_path or os.environ.get("MIDAS_WARM_LEAN_PATH", "")
+        if not binary or not os.path.exists(binary):
+            raise RuntimeError(
+                "verifier_backend='warm' needs config.warm_binary (or $MIDAS_WARM_BINARY) pointing at a "
+                "built midas_proof_verifier `warm` executable, and config.warm_lean_path (or "
+                "$MIDAS_WARM_LEAN_PATH) with the Mathlib LEAN_PATH. See INTEGRATION.md.")
+        self._lib = "Mathlib" if any("Mathlib" in l for l in config.lean_prelude) else "Mathlib"
+        print("⚠️  WarmTxnBackend is EXPERIMENTAL/unvalidated — see midas/warm_backend.py header.")
+        env = os.environ.copy()
+        if lean_path:
+            env["LEAN_PATH"] = lean_path
+        self.proc = subprocess.Popen([binary, self._lib, "400000"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, env=env, bufsize=1)
+        # drain startup until the server is ready
+        while True:
+            line = self.proc.stdout.readline()
+            if line == "":
+                raise RuntimeError("warm process exited before becoming ready")
+            if line.startswith("[ready]"):
+                break
+
+    def _submit(self, block: str) -> str:
+        """Send one %%-delimited block; return the verdict text from the next `[node …]` line.
+        Scanning to the next `[node …]` line naturally skips any trailing goal lines from a prior
+        OPEN verdict — hence the sentinel-hardening recommendation in the header."""
+        self.proc.stdin.write(block.rstrip() + "\n%%\n")
+        self.proc.stdin.flush()
+        while True:
+            line = self.proc.stdout.readline()
+            if line == "":
+                raise RuntimeError("warm process ended mid-request")
+            m = _NODE.match(line)
+            if m:
+                return m.group(1).strip()
+
+    @staticmethod
+    def _strip_imports(prelude):
+        return [l for l in prelude if not l.strip().startswith("import ")]
+
+    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body):
+        t0 = time.perf_counter()
+        pre = self._strip_imports(prelude)
+        parts = ([context] + list(accepted_declarations)
+                 + ([candidate_declaration] if (candidate_declaration or "").strip() else []))
+        decl_block = "\n".join(pre + ["\n\n".join(parts)])
+
+        v1 = self._submit(decl_block)
+        if not v1.startswith("ACCEPT"):
+            wall = (time.perf_counter() - t0) * 1000
+            return CheckpointResult(CheckResult("failed", [_diag(v1)]), CheckResult("not_run"),
+                                    None, 0.0, 0.0, wall, v1, "")
+
+        body_block = decl_block + "\n\n" + (candidate_body or "")
+        v2 = self._submit(body_block)
+        body_ok = v2.startswith("ACCEPT") or v2.startswith("OPEN")
+        contains_sorry = v2.startswith("OPEN")
+        body_check = CheckResult("passed" if body_ok else "failed", [] if body_ok else [_diag(v2)])
+        wall = (time.perf_counter() - t0) * 1000
+        return CheckpointResult(CheckResult("passed"), body_check, contains_sorry, 0.0, 0.0, wall, v1, v2)
+
+    def compile_full_file(self, path: str) -> CompileResult:
+        v = self._submit(open(path).read())
+        ok = v.startswith("ACCEPT")
+        return CompileResult(ok, 0 if ok else 1, [] if ok else [Diag("<warm>", 0, 0, "error", "", v[:300])],
+                             v.startswith("OPEN"), v, 0.0)
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+            self.proc.terminate()
+        except Exception:
+            pass
