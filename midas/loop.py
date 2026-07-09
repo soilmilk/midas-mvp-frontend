@@ -333,7 +333,12 @@ def _check_errs(vr):
     if not cp: return []
     errs = cp.declaration_check.errors + cp.body_check.errors
     from .models import Diagnostic
-    return [Diagnostic(**{k: getattr(e, k, "") for k in ("file","line","col","severity","code","message")}) for e in errs]
+    out = []
+    for e in errs:                       # each is a Diag-as-dict (§19 schema), NOT an object
+        out.append(Diagnostic(file=e.get("file", ""), line=int(e.get("line") or 0),
+                              col=int(e.get("col") or 0), severity=e.get("severity", "error"),
+                              code=e.get("code", ""), message=e.get("message", "")))
+    return out
 
 def _env_text(prelude, context, accepted_decls):
     return reconstruct(prelude, context, accepted_decls, "-- (theorem body omitted)")
