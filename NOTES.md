@@ -87,6 +87,11 @@ goals directly in the body, skipping the declaration delta):
 Input gate (no LLM): all three pass context check + initial-body check + header extraction;
 reference solutions compile. Phase 4 will run them live.
 
+## Phase 5 — CLI (2026-07-09)
+midas/cli.py: run/status/attempts/show/replay (argparse). `replay` recompiles one checkpoint
+via the verifier only (no LLM). `attempts` shows a declarations? column that surfaces the
+lemma-skip directly. Why the loop skips lemma-first: see LEMMA_FIRST_ANALYSIS.md.
+
 ## Phase 4 — live runs (2026-07-09) → see PHASE4_REPORT.md
 2/3 solved (p1 ✅, p3 ✅, p2 ❌ max_proof_steps), no crashes. Big findings: (1) parser CLEAN on
 28 real attempts (0 parse_error / 0 format_failed); (2) **0 lemmas created in any run** — models
