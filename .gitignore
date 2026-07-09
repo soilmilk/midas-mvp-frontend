@@ -1,0 +1,6 @@
+.work/
+__pycache__/
+*.olean
+*.pyc
+.venv/
+runs/*/tmp/
