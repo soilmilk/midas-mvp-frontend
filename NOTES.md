@@ -74,6 +74,40 @@ Live smoke run of `problems/toy` (gpt-5 + claude-sonnet-5 via OpenRouter) → **
 6. §12 unenforced weakness (axiom/unsafe/native_decide) — none appeared; the only `sorry` is in an
    intermediate accepted body (`ps001`), which is expected, not a violation. Phase 4 report will scan.
 
+## Hang investigation (2026-07-09) — measured
+
+The >2 min "hang" was **not** a stuck loop or a Lean issue. Measured per-call latency (OpenRouter):
+
+| call | latency | reasoning tokens |
+|---|--:|--:|
+| gpt-5 default effort | 9.7–13.4 s | 576–896 |
+| gpt-5 `reasoning_effort=low` | 6.2 s | 384 |
+| gpt-5 `reasoning_effort=minimal` | 1.5 s | 0 |
+| claude-sonnet-5 (translation) | 5.3–5.8 s | 0 |
+
+Root cause of the multi-minute event: **the OpenAI SDK's default read timeout is 600 s** (`connect=5,
+read=600`). Before we set an explicit timeout, a single stalled/slow upstream call could hang up to
+10 minutes with no cap — the 2 min *tool* timeout cut it first. Normal calls are 5–14 s; a full run
+is the *sum* over steps × retries, so a few unlucky/slow calls stack up.
+
+Fixes applied: (1) client `timeout=180s, max_retries=2` caps any stalled call; (2) `reasoning_effort`
+is now config-driven, **default `low`** (≈2× faster than default, still real reasoning). `minimal`
+is fastest but 0 reasoning tokens — risky for genuine proof steps.
+
+**What speeds it up on the user's end (latency is network/model, not local compute):**
+1. Lower `reasoning_effort` in config (`low` default; `minimal` for max speed at quality risk).
+2. OpenRouter account/routing: latency + rate limits depend on tier and which provider OpenRouter
+   picks; a higher tier / provider preference reduces queueing. Local machine is never the bottleneck
+   (Lean core compiles are 0.3–0.6 s).
+3. Optional: lower translation `max_tokens` (claude needs ~2–4k, not 8k) — marginal.
+
+## Status split (user request, 2026-07-09) — reverses NOTES §3
+Split the old single `format_failed` into two `lean_translation_attempt` statuses:
+- **`parse_error`** — raw output could not be parsed into the required sections (§11 OutputParser).
+- **`format_failed`** — parsed OK but broke a structure rule (§8/§12: sorry-in-decl, header changed,
+  repeated name, >1 theorem). Lets the metaoptimizer separate "model can't follow the output shape"
+  from "model followed the shape but broke a Lean-structure rule."
+
 ## Phase 1 judgment calls (implemented)
 - Toy `context.lean` uses no imports (`prelude=[]`), so every compile is a fresh core-only `lean`
   (~0.3–0.6 s). `A = 2+3`, `B = 15/3` (both 5, structurally different), `f n = n*n`; target

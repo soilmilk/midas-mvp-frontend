@@ -18,6 +18,8 @@ class Config(BaseModel):
     # not in the spec's example but referenced by §9/§10 — OpenRouter model slugs, overridable
     reasoning_model: str = "openai/gpt-5"
     translation_model: str = "anthropic/claude-sonnet-5"
+    # gpt-5 is a reasoning model; latency = reasoning tokens. minimal(~1.5s) < low(~6s) < medium/high.
+    reasoning_effort: str = "low"
 
 
 # ---------------- compile.json (§19) ----------------
@@ -48,7 +50,11 @@ class CompileJson(BaseModel):
 # ---------------- state hierarchy (§5, §17) ----------------
 class LeanTranslationAttempt(BaseModel):
     lean_translation_attempt_index: int
-    status: str = "pending"          # pending|format_failed|lemma_failed|body_failed|accepted|final_success|final_reconstruction_failed
+    # pending | parse_error | format_failed | lemma_failed | body_failed | accepted
+    #        | final_success | final_reconstruction_failed
+    # parse_error  = raw output could not be parsed into the required sections (§11)
+    # format_failed = parsed OK but broke a structure rule (§8/§12)
+    status: str = "pending"
     translator_prompt_path: Optional[str] = None
     raw_translator_output_path: Optional[str] = None
     declarations_path: Optional[str] = None

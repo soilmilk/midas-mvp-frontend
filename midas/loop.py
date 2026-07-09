@@ -144,7 +144,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
     header = vr.header
     prelude = prob.config.lean_prelude
-    reasoning = ReasoningAgent(prob.config.reasoning_model, _read(os.path.join(CONSID, "INFORMAL_REASONING_CONSIDERATIONS.md")), reasoning_offline)
+    reasoning = ReasoningAgent(prob.config.reasoning_model, _read(os.path.join(CONSID, "INFORMAL_REASONING_CONSIDERATIONS.md")), reasoning_offline, reasoning_effort=prob.config.reasoning_effort)
     translation = TranslationAgent(prob.config.translation_model, _read(os.path.join(CONSID, "FORMAL_TRANSLATION_CONSIDERATIONS.md")), translation_offline)
 
     accepted_decls: List[str] = []
@@ -196,13 +196,12 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
                 pr = parse_translator_output(t.text)
 
-                # ---- parse / structure (§11/§12) -> format_failed ----
+                # ---- parse (§11): raw output could not be parsed -> parse_error ----
                 if not pr.ok:
-                    cj = build_compile_json("format_failed",
+                    cj = build_compile_json("parse_error",
                                             _struct(False, [f"parse: {pr.error}"]))
-                    cj.raw_verifier_output = ""
                     _log_attempt(logger, la, paths, i, j, k, t, None, None, cj)
-                    la.status = "format_failed"; bump("bad_output_format")
+                    la.status = "parse_error"; bump("parse_error")
                     compiler_feedback = f"Your output was not parseable: {pr.error}. Emit the two required sections."
                     statemgr.save(state); continue
 

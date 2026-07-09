@@ -48,7 +48,7 @@ la2 = os.path.join(root, "artifacts", "proof_steps", "ps001", "ic001", "la002", 
 checks.append(("ps001 has la001 + la002", os.path.exists(la1) and os.path.exists(la2)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
-    checks.append(("la001 attempt_status == format_failed", cj["attempt_status"] == "format_failed"))
+    checks.append(("la001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
 checks.append(("accepted/ps001..003 present",
                all(os.path.exists(os.path.join(root, "accepted", f"ps{n:03d}", "body.lean")) for n in (1, 2, 3))))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step

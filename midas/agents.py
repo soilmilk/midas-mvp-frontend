@@ -36,11 +36,11 @@ class LLMResult:
     completion_tokens: int = 0
 
 
-def _call(model: str, prompt: str, max_tokens: int) -> LLMResult:
-    r = _client().chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens)
+def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None) -> LLMResult:
+    kw = dict(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=max_tokens)
+    if reasoning_effort:                       # only for reasoning models (gpt-5); big latency lever
+        kw["reasoning_effort"] = reasoning_effort
+    r = _client().chat.completions.create(**kw)
     u = r.usage
     return LLMResult(prompt, (r.choices[0].message.content or "").strip(), r.model,
                      getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0))
@@ -49,11 +49,13 @@ def _call(model: str, prompt: str, max_tokens: int) -> LLMResult:
 # ---------------- ReasoningAgent (§9) ----------------
 class ReasoningAgent:
     def __init__(self, model: str, considerations: str,
-                 offline_responses: Optional[List[str]] = None, max_tokens: int = 16000):
+                 offline_responses: Optional[List[str]] = None, max_tokens: int = 16000,
+                 reasoning_effort: str = "low"):
         self.model = model
         self.considerations = considerations
         self.offline = offline_responses
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
 
     def build_prompt(self, informal_problem: str, informal_progress: str, knowledge: List[str],
                      context_summary: str, accepted_decls_summary: str, current_body: str,
@@ -82,7 +84,7 @@ class ReasoningAgent:
         if self.offline is not None:                       # sequential canned queue
             text = self.offline.pop(0) if self.offline else ""
             return LLMResult(prompt, text, self.model + "[offline]")
-        return _call(self.model, prompt, self.max_tokens)
+        return _call(self.model, prompt, self.max_tokens, reasoning_effort=self.reasoning_effort)
 
 
 # ---------------- TranslationAgent (§10) ----------------
