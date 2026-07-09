@@ -1,9 +1,3 @@
-# Informal Reasoning Considerations (v0.1)
-
-Inserted into the informal-reasoning prompt (SPEC §9). Seeded from the spec's stated role;
-expected to grow as the metaoptimizer observes failure patterns. Every rule is a prior, not
-yet an observed pattern.
-
 ## Output shape (hard requirement)
 - Output exactly: optional `[intermediate reasoning]`, then `NEXT STEP:`, then `PROOF:`.
 - `NEXT STEP` is ONE small, self-contained advance — a single lemma or a single tactic-level

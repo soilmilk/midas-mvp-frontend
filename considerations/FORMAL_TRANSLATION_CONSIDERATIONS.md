@@ -1,11 +1,5 @@
-# Formal Translation Considerations (v0.1)
 
-Inserted into the Lean-translation prompt (SPEC §10), before generation. Adapted from
-`LEAN4_TRANSLATOR_CONSIDERATIONS.md` to this MVP's actual output contract (§10/§11:
-`NEW DECLARATIONS` / `UPDATED THEOREM BODY`). Every rule is a prior; the metaoptimizer
-refines it from observed compiler errors.
-
-## Output structure (hard requirement, §10/§11)
+## Output structure (hard requirement)
 - Output the two required sections, in this order, each as a fenced code block:
   `NEW DECLARATIONS:` then `UPDATED THEOREM BODY:`. Intermediate reasoning before them is fine.
 - `NEW DECLARATIONS` is a **delta**: only new lemmas/defs, each with a descriptive comment. It
@@ -50,6 +44,3 @@ refines it from observed compiler errors.
 
 ## Examples
 *(placeholder — add 2–3 worked step→output pairs once real successful translations accumulate.)*
-
-**Changelog**
-- v0.1 — adapted from LEAN4_TRANSLATOR_CONSIDERATIONS.md to §10/§11 contract; scoped to Core/Std.
