@@ -87,6 +87,15 @@ goals directly in the body, skipping the declaration delta):
 Input gate (no LLM): all three pass context check + initial-body check + header extraction;
 reference solutions compile. Phase 4 will run them live.
 
+## Phase 4 — live runs (2026-07-09) → see PHASE4_REPORT.md
+2/3 solved (p1 ✅, p3 ✅, p2 ❌ max_proof_steps), no crashes. Big findings: (1) parser CLEAN on
+28 real attempts (0 parse_error / 0 format_failed); (2) **0 lemmas created in any run** — models
+prove directly in the body; p3 dodged the intended A/B lemma split via `congrArg`, p2 had no
+body-only route and flailed; (3) p2 is a live instance of §15 fake/useless-progress (8 accepted
+non-progressing steps → limit); (4) no §12 unsound commands. Recommendations (not auto-applied):
+add a progress metric, add a "generalize when IH too weak" reasoning rule, close body-only escapes
+to test the lemma path. Run artifacts are local under `runs/` (gitignored).
+
 ## Hang investigation (2026-07-09) — measured
 
 The >2 min "hang" was **not** a stuck loop or a Lean issue. Measured per-call latency (OpenRouter):
