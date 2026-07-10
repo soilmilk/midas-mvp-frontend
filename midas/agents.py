@@ -105,7 +105,14 @@ class TranslationAgent:
     def build_prompt(self, header: str, context: str, accepted_decls: str, current_body: str,
                      informal_candidate: str, compiler_feedback: str = "") -> str:
         parts = [
-            "Translate one informal proof step into Lean 4.",
+            (
+                "You are part of a system that converts an English mathematical proof into a Lean 4 proof.\n\n"
+                "The English proof is given one step at a time. You will be given the next step, and your task is to update the "
+                "current Lean 4 proof state so that it reflects the step.\n\n"
+                "You may do this by:\n"
+                "1. adding new Lean lemmas or definitions, and/or\n"
+                "2. replacing the current theorem body with an updated theorem body.\n\n"
+            ),
             "\n## Original formal theorem header (copy EXACTLY, byte-for-byte)\n```\n" + header + "\n```",
             "\n## Fixed input/context.lean (already available, do not restate/import)\n```lean4\n" + context + "\n```",
             "\n## Current accepted Lean declarations (available; do not repeat)\n" + (accepted_decls or "(none)"),
