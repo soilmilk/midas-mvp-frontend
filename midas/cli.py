@@ -71,12 +71,12 @@ def cmd_status(args):
     for ps in st.proof_steps:
         n_cand = len(ps.informal_candidates)
         n_att = sum(len(c.lean_translation_attempts) for c in ps.informal_candidates)
-        print(f"  ps{ps.proof_step_index:03d}  {ps.status:<14} candidates={n_cand} attempts={n_att}")
+        print(f"  proof_step_{ps.proof_step_index:03d}  {ps.status:<14} candidates={n_cand} attempts={n_att}")
 
 
 def cmd_attempts(args):
     st = _load_state(_run_root(args, args.problem_id))
-    print(f"{'ps':>4} {'ic':>4} {'la':>4}  {'status':<26} declarations?")
+    print(f"{'step':>4} {'cand':>4} {'att':>4}  {'status':<26} declarations?")
     print("-" * 60)
     for ps in st.proof_steps:
         if args.step and ps.proof_step_index != args.step:
@@ -105,7 +105,7 @@ def cmd_show(args):
     icd = p.ic(args.step, args.candidate)
     lad = p.la(args.step, args.candidate, args.attempt)
     if not os.path.isdir(lad):
-        sys.exit(f"no such attempt: ps{args.step:03d}/ic{args.candidate:03d}/la{args.attempt:03d}")
+        sys.exit(f"no such attempt: proof_step_{args.step:03d}/informal_candidate_{args.candidate:03d}/lean4_attempt_{args.attempt:03d}")
 
     def dump(title, path):
         print(f"\n{'='*72}\n{title}  ({path})\n{'='*72}")
@@ -128,7 +128,7 @@ def cmd_replay(args):
     p = Paths(os.path.dirname(root), os.path.basename(root))
     lad = p.la(args.step, args.candidate, args.attempt)
     if not os.path.isdir(lad):
-        sys.exit(f"no such attempt: ps{args.step:03d}/ic{args.candidate:03d}/la{args.attempt:03d}")
+        sys.exit(f"no such attempt: proof_step_{args.step:03d}/informal_candidate_{args.candidate:03d}/lean4_attempt_{args.attempt:03d}")
 
     config = json.load(open(os.path.join(root, "config.json")))
     prelude = config.get("lean_prelude", [])
@@ -136,13 +136,13 @@ def cmd_replay(args):
     # accumulated accepted declarations from steps strictly before this one
     accepted = []
     for s in range(1, args.step):
-        dp = os.path.join(root, "accepted", f"ps{s:03d}", "declarations.lean")
+        dp = p.accepted_ps(s) + "/declarations.lean"
         if os.path.exists(dp):
             accepted.append(open(dp).read())
     cand_decl = open(os.path.join(lad, "declarations.lean")).read() if os.path.exists(os.path.join(lad, "declarations.lean")) else ""
     cand_body = open(os.path.join(lad, "body.lean")).read() if os.path.exists(os.path.join(lad, "body.lean")) else ""
 
-    print(f"replaying ps{args.step:03d}/ic{args.candidate:03d}/la{args.attempt:03d} "
+    print(f"replaying proof_step_{args.step:03d}/informal_candidate_{args.candidate:03d}/lean4_attempt_{args.attempt:03d} "
           f"(prelude={len(prelude)} lines, {len(accepted)} prior accepted decls) — verifier only\n")
     cp = VerifierClient().check(prelude, context, accepted, cand_decl, cand_body)
     print(f"declaration_check: {cp.declaration_check.status}")

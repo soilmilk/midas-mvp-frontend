@@ -220,10 +220,10 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 runs/<id>/
   config.json  state.json
   input/            (copied inputs + context_check.json / initial_body_check.json)
-  artifacts/proof_steps/psNNN/icNNN/{reasoning_prompt.md, informal_step.md}
-                                    /laNNN/{translator_prompt.md, raw_translator_output.md,
-                                            declarations.lean, body.lean, compile.json}
-  accepted/psNNN/{declarations.lean, body.lean}     # the accepted path only
+  artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md, informal_step.md}
+                                    /lean4_attempt_NNN/{translator_prompt.md, raw_translator_output.md,
+                                                        declarations.lean, body.lean, compile.json}
+  accepted/proof_step_NNN/{declarations.lean, body.lean}     # the accepted path only
   final/{solution.lean, solution.md}                # on success
   failure/{failure_report.md, last_verified.lean, last_body.lean}   # on failure
 ```
@@ -265,7 +265,7 @@ All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<pro
 Examples:
 ```bash
 python3 -m midas.cli attempts p2_lemma --failed-only
-python3 -m midas.cli show p3_imo 4 1 1        # ps004 / candidate 1 / attempt 1
+python3 -m midas.cli show p3_imo 4 1 1        # proof_step_004 / candidate 1 / attempt 1
 python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
 ```
 

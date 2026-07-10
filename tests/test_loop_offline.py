@@ -42,15 +42,15 @@ checks.append(("final status == final_success", state.status == "final_success")
 checks.append(("accepted proof steps == 3", state.stats.accepted_proof_steps == 3))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
 checks.append(("final/solution.lean written", os.path.exists(os.path.join(root, "final", "solution.lean"))))
-# §6 layout: step1 has la001 (format_failed) and la002 (accepted)
-la1 = os.path.join(root, "artifacts", "proof_steps", "ps001", "ic001", "la001", "compile.json")
-la2 = os.path.join(root, "artifacts", "proof_steps", "ps001", "ic001", "la002", "compile.json")
-checks.append(("ps001 has la001 + la002", os.path.exists(la1) and os.path.exists(la2)))
+# §6 layout: step1 has lean4_attempt_001 (format_failed) and lean4_attempt_002 (accepted)
+la1 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_001", "compile.json")
+la2 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_002", "compile.json")
+checks.append(("proof_step_001 has lean4_attempt_001 + lean4_attempt_002", os.path.exists(la1) and os.path.exists(la2)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
-    checks.append(("la001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
-checks.append(("accepted/ps001..003 present",
-               all(os.path.exists(os.path.join(root, "accepted", f"ps{n:03d}", "body.lean")) for n in (1, 2, 3))))
+    checks.append(("lean4_attempt_001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
+checks.append(("accepted/proof_step_001..003 present",
+               all(os.path.exists(os.path.join(root, "accepted", f"proof_step_{n:03d}", "body.lean")) for n in (1, 2, 3))))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step
 st = StateManager.load(root)
 inv = all(sum(1 for c in s.informal_candidates if c.status == "accepted") == 1

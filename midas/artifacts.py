@@ -4,8 +4,8 @@ Artifact layout (§6) + LeanArtifactLogger + StateManager persistence.
 Exact §6 tree:
   runs/<pid>/ config.json state.json
     input/ (informal_problem.md context.lean body_initial.lean *_check.json)
-    artifacts/proof_steps/psNNN/icNNN/{reasoning_prompt.md,informal_step.md}/laNNN/{...}
-    accepted/psNNN/{declarations.lean,body.lean}
+    artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{...}
+    accepted/proof_step_NNN/{declarations.lean,body.lean}
     tmp/ final/{solution.lean,solution.md} failure/{failure_report.md,...}
 """
 from __future__ import annotations
@@ -31,10 +31,10 @@ class Paths:
         self.final = os.path.join(self.root, "final")
         self.failure = os.path.join(self.root, "failure")
 
-    def ps(self, i):  return os.path.join(self.artifacts, f"ps{i:03d}")
-    def ic(self, i, j):  return os.path.join(self.ps(i), f"ic{j:03d}")
-    def la(self, i, j, k):  return os.path.join(self.ic(i, j), f"la{k:03d}")
-    def accepted_ps(self, i):  return os.path.join(self.accepted, f"ps{i:03d}")
+    def ps(self, i):  return os.path.join(self.artifacts, f"proof_step_{i:03d}")
+    def ic(self, i, j):  return os.path.join(self.ps(i), f"informal_candidate_{j:03d}")
+    def la(self, i, j, k):  return os.path.join(self.ic(i, j), f"lean4_attempt_{k:03d}")
+    def accepted_ps(self, i):  return os.path.join(self.accepted, f"proof_step_{i:03d}")
 
 
 class LeanArtifactLogger:
