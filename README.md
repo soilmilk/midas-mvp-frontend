@@ -43,7 +43,7 @@ end). Only accepted artifacts are used to reconstruct the final proof.
 
 ---
 
-## Setup & running (Ubuntu environment)
+## Setup & running (Ubuntu environment - setup WSL if you're on Windows)
 
 **1. Add your OpenRouter API key**
 You will need to create your own key and buy credits on OpenRouter ($10 should be enough), or alternatively reach out to Daniel to share his API key.
