@@ -1,0 +1,17 @@
+name = "wsrv"
+defaultTargets = ["warm"]
+
+[[lean_exe]]
+name = "warm"
+root = "Warm"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "warmchain"
+root = "WarmChain"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "warmtxn"
+root = "WarmTxn"
+supportInterpreter = true

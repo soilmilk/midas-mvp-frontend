@@ -11,3 +11,6 @@ runs/
 */runs/
 .test_runs/
 .DS_Store
+warm-server/.lake/
+warm-server/lake-manifest.json
+warm-server/mathlib_leanpath.txt

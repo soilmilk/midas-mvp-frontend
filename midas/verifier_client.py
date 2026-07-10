@@ -6,7 +6,7 @@ accumulated context) are fixed; the *engine* that runs them is swappable:
 
   FreshCompileBackend  (default) — a fresh `lean` subprocess per checkpoint (Phase 1). Right for
                                    Core/Std, where a cold compile is ~0.3–0.6 s.
-  WarmTxnBackend       (opt-in)  — routes to the sibling `midas_proof_verifier` warm server, which
+  WarmTxnBackend       (opt-in)  — routes to the in-repo `warm-server` executable, which
                                    keeps Mathlib resident and pays `import Mathlib` ONCE. Right for a
                                    Mathlib prelude, where a cold compile is ~15–40 s. See
                                    midas/warm_backend.py and INTEGRATION.md.
@@ -24,9 +24,9 @@ from .models import CompileJson, CheckReport, Diagnostic  # noqa: E402
 from .structure import StructureResult  # noqa: E402
 
 
-# ---------------- backend interface (the midas_proof_verifier link point) ----------------
+# ---------------- backend interface (fresh compile or warm server) ----------------
 class VerifierBackend:
-    """Interface both backends implement. This is the seam where midas_proof_verifier plugs in."""
+    """Interface both backends implement."""
     def check(self, prelude: List[str], context: str, accepted_declarations: List[str],
               candidate_declaration: str, candidate_body: str) -> CheckpointResult:
         raise NotImplementedError

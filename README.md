@@ -93,7 +93,19 @@ cd midas-mvp                    # <-- run everything below from here
 lean --version                  # Should print something that starts with "Lean (version 4.31.0."
 ```
 
-**5. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
+**5. Build the warm verifier and connect it to Mathlib.**
+Future problems are expected to use `import Mathlib`, so the warm backend is part of normal setup.
+The warm executable is built from this repo; Mathlib oleans stay in your local `mathlib_host`.
+```bash
+cd warm-server
+lake build warm
+cd ..
+
+# Save the Mathlib LEAN_PATH where midas-mvp's warm backend will read it automatically.
+(cd ~/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
+```
+
+**6. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
 OpenRouter's OpenAI-compatible API.
 ```bash
 # Assuming that you're still on the midas-mvp folder
@@ -103,18 +115,18 @@ pip install pydantic openai
 ```
 
 
-**6. Testing the install — NO key needed** (proves Lean + Python are wired up correctly).
+**7. Testing the install — NO key needed** (proves Lean + Python are wired up correctly).
 ```bash
 python3 verifier/run_phase1.py       # must end: PHASE 1 GATE: PASS
 python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
 python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
 ```
 
-**7. Run a real proof** (the Core/Std problems need only the key).
+**8. Run a real Mathlib proof** (needs your OpenRouter key).
 ```bash
 source ~/.midas-mvp.env
-python3 -m midas.cli run problems/p1_sanity
-python3 -m midas.cli status p1_sanity
+python3 -m midas.cli run problems/p4_n5_30
+python3 -m midas.cli status p4_n5_30
 ```
 
 ---
@@ -155,7 +167,8 @@ Rules that matter:
   ],
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",
-  "reasoning_effort": "low"
+  "reasoning_effort": "low",
+  "verifier_backend": "warm"
 }
 ```
 - `lean_prelude` — **full Lean lines**, prepended verbatim (e.g. `"import Mathlib"`, `"set_option maxHeartbeats 0"`).
@@ -166,18 +179,19 @@ Rules that matter:
 
 ### Running a Mathlib problem
 
+After setup, Mathlib problems should use `verifier_backend: "warm"`. The backend defaults to the
+in-repo binary at `warm-server/.lake/build/bin/warm` and reads Mathlib from
+`warm-server/mathlib_leanpath.txt`.
+
 ```bash
-# The mathlib_project must be the **prebuilt v4.31.0 Mathlib** (must match `lean-toolchain`)
-
-# ex: export LEAN_PATH="$(cd ~/mathlib_host && lake env printenv LEAN_PATH)"
-export LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env printenv LEAN_PATH)"
 source ~/.midas-mvp.env
-
-# ex: python3 -m midas.cli run p4_n5_30
-python3 -m midas.cli run <mathlib_problem>
+python3 -m midas.cli run problems/<mathlib_problem>
 ```
-With the default `fresh` backend, every checkpoint cold-compiles Mathlib (~seconds each) — slow over
-many steps. For heavy Mathlib work, switch to the **warm backend** ([INTEGRATION.md](INTEGRATION.md)).
+
+If you did not save `warm-server/mathlib_leanpath.txt`, set the path for the current shell instead:
+```bash
+export MIDAS_WARM_LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env printenv LEAN_PATH)"
+```
 
 
 ### Troubleshooting
@@ -187,7 +201,7 @@ many steps. For heavy Mathlib work, switch to the **warm backend** ([INTEGRATION
 | `No module named 'pydantic'` / `'openai'` | deps missing | `pip install pydantic openai` |
 | `lean: command not found` / wrong version | elan not set up / not on PATH | rerun the elan installer, `source "$HOME/.elan/env"`, then `lean --version` inside the repo |
 | warning `OPENROUTER_API_KEY not set`, then live calls fail | key not loaded | `source ~/.midas-mvp.env` in the *same* shell (your own key) |
-| run ends `failed (context_failed)`, error `unknown module prefix 'Mathlib'` | a Mathlib problem with no Mathlib on `LEAN_PATH` | `export LEAN_PATH=…` (see "Running a Mathlib problem"); ensure that Mathlib is **v4.31.0** |
+| warm run fails before starting, or Lean reports `unknown module prefix 'Mathlib'` | Mathlib `LEAN_PATH` is missing or points at the wrong version | rerun `(cd ~/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt`; ensure Mathlib is **v4.31.0** |
 | seems to hang on a call | OpenRouter throttling (account tier) | the loop caps each call by the remaining runtime budget; raise your tier or lower `reasoning_effort` |
 
 ---
@@ -273,7 +287,7 @@ change (structurally, not just in prompts).
 SPEC.md*                    the design doc (external; not committed)
 README.md                   this file
 HANDOFF.md                  how the team trains/evolves it (metaoptimizing loop)
-INTEGRATION.md              how midas_proof_verifier plugs in as the warm verifier backend
+INTEGRATION.md              how the in-repo warm verifier backend works
 NOTES.md                    spec-review ambiguities + all build/run findings
 PHASE4_REPORT.md            results of the 3 live runs
 LEMMA_FIRST_ANALYSIS.md     why lemma-first is skipped + fixes
@@ -283,6 +297,7 @@ considerations/             the two prompt files the models read (edit these to 
 midas/                      the loop: models, agents, parser, structure, verifier_client,
                             reconstructor, artifacts, loop, cli
 verifier/                   checkpoint_builder.py (fresh `lean` per checkpoint) + phase-1 gate
+warm-server/                Lean/Lake warm verifier executable for Mathlib-heavy checks
 problems/                   p1_sanity, p2_lemma, p3_imo (+ toy), each input/ + config.json
 tests/                      offline pipeline + offline loop tests (no API key)
 ```
@@ -293,12 +308,11 @@ tests/                      offline pipeline + offline loop tests (no API key)
 
 - **Pluggable verifier backend.** `VerifierClient` runs the §14 checkpoint semantics through a
   swappable `VerifierBackend`: `fresh` (default — a `lean` subprocess per checkpoint, fast for
-  Core/Std) or `warm` (routes to the sibling **`midas_proof_verifier`** warm server, which keeps
-  Mathlib resident and pays `import Mathlib` once). Select with `config.verifier_backend`. The warm
-  adapter is built but **experimental/unvalidated** (only matters for a Mathlib prelude) — see
+  Core/Std) or `warm` (routes to the in-repo `warm-server` executable, which keeps
+  Mathlib resident and pays `import Mathlib` once). Select with `config.verifier_backend`; see
   **[INTEGRATION.md](INTEGRATION.md)**.
-- **Mathlib:** set `lean_prelude` to `["import Mathlib", ...]`, switch `verifier_backend` to `"warm"`,
-  and point it at a built `midas_proof_verifier` warm exe + Mathlib `LEAN_PATH` (INTEGRATION.md).
-  With the `fresh` backend, a Mathlib checkpoint takes tens of seconds each.
+- **Mathlib:** future problems should use `lean_prelude` with `"import Mathlib"` and
+  `verifier_backend: "warm"`. Setup builds `warm-server` and saves the Mathlib `LEAN_PATH`; with
+  the `fresh` backend, a Mathlib checkpoint takes tens of seconds each.
 - The **Metaoptimizer agent itself** (SPEC §20) is out of MVP scope — the loop logs everything it
   would consume; `HANDOFF.md` describes building it.

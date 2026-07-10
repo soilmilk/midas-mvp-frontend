@@ -1,10 +1,10 @@
 """
-WarmTxnBackend — routes midas-mvp's checkpoint checks to the sibling `midas_proof_verifier`
-warm server (the `warm` executable), which keeps Mathlib resident and pays `import Mathlib` ONCE.
+WarmTxnBackend — routes midas-mvp's checkpoint checks to the in-repo `warm-server`
+executable, which keeps Mathlib resident and pays `import Mathlib` ONCE.
 
 WHY: with a Mathlib prelude, FreshCompileBackend re-pays ~15–40 s per checkpoint. The warm server
 loads Mathlib once (~15–40 s) then verifies each block in ~10–500 ms — measured break-even ≈ 2
-checkpoints (see midas_proof_verifier and the checkpoint-validation timings).
+checkpoints (see INTEGRATION.md for checkpoint-validation timings).
 
 HOW: one long-lived `warm` process; each `check()` submits the assembled block(s) over stdin and
 reads the verdict. The `warm` (stateless) verifier gates each block against resident Mathlib, which
@@ -14,18 +14,21 @@ matches this backend's stateless `check()` (the loop passes `accepted_declaratio
   body check        : + candidate_body                            → ACCEPT (closed) / OPEN (sorry)
 
 VALIDATED (2026-07-09): verdicts match FreshCompileBackend on shared Mathlib cases (sorry body,
-partial proof, broken body). To use: point `config.warm_binary` / `config.warm_lean_path` (or
-`$MIDAS_WARM_BINARY` / `$MIDAS_WARM_LEAN_PATH`) at a built `midas_proof_verifier` warm exe + a Mathlib
+partial proof, broken body). To use: build `warm-server/.lake/build/bin/warm`, provide a Mathlib
 LEAN_PATH, and set `verifier_backend: "warm"`. Optional hardening: have `warm` print a per-response
 sentinel (`%%DONE`) so `_submit()` needn't scan for the next `[node …]` line.
 """
 from __future__ import annotations
 import os, re, subprocess, time
 from dataclasses import asdict
+from pathlib import Path
 
 from verifier.checkpoint_builder import CheckpointResult, CheckResult, CompileResult, Diag
 
 _NODE = re.compile(r"\[node \d+\]\s+\d+\s*ms\s+(.*)")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_WARM_BINARY = _REPO_ROOT / "warm-server" / ".lake" / "build" / "bin" / "warm"
+_DEFAULT_LEAN_PATH_FILE = _REPO_ROOT / "warm-server" / "mathlib_leanpath.txt"
 
 
 def _diag(msg: str):
@@ -34,13 +37,21 @@ def _diag(msg: str):
 
 class WarmTxnBackend:
     def __init__(self, config):
-        binary = config.warm_binary or os.environ.get("MIDAS_WARM_BINARY", "")
-        lean_path = config.warm_lean_path or os.environ.get("MIDAS_WARM_LEAN_PATH", "")
+        binary = config.warm_binary or os.environ.get("MIDAS_WARM_BINARY", "") or str(_DEFAULT_WARM_BINARY)
+        lean_path = (config.warm_lean_path or os.environ.get("MIDAS_WARM_LEAN_PATH", "")
+                     or os.environ.get("LEAN_PATH", ""))
+        if not lean_path and _DEFAULT_LEAN_PATH_FILE.exists():
+            lean_path = _DEFAULT_LEAN_PATH_FILE.read_text().strip()
         if not binary or not os.path.exists(binary):
             raise RuntimeError(
-                "verifier_backend='warm' needs config.warm_binary (or $MIDAS_WARM_BINARY) pointing at a "
-                "built midas_proof_verifier `warm` executable, and config.warm_lean_path (or "
-                "$MIDAS_WARM_LEAN_PATH) with the Mathlib LEAN_PATH. See INTEGRATION.md.")
+                "verifier_backend='warm' could not find a built warm executable. Run "
+                "`cd warm-server && lake build warm` from the midas-mvp repo, or set "
+                "config.warm_binary / $MIDAS_WARM_BINARY. See INTEGRATION.md.")
+        if not lean_path:
+            raise RuntimeError(
+                "verifier_backend='warm' needs a Mathlib LEAN_PATH via config.warm_lean_path, "
+                "$MIDAS_WARM_LEAN_PATH, $LEAN_PATH, or warm-server/mathlib_leanpath.txt. "
+                "See INTEGRATION.md.")
         self._lib = "Mathlib" if any("Mathlib" in l for l in config.lean_prelude) else "Mathlib"
         print(f"[warm backend] loading {self._lib} once via {os.path.basename(binary)} …", flush=True)
         env = os.environ.copy()

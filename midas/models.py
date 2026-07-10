@@ -20,10 +20,10 @@ class Config(BaseModel):
     translation_model: str = "anthropic/claude-sonnet-5"
     # gpt-5 is a reasoning model; latency = reasoning tokens. minimal(~1.5s) < low(~6s) < medium/high.
     reasoning_effort: str = "low"
-    # "fresh" = fresh `lean` per checkpoint (default). "warm" = midas_proof_verifier warm server
+    # "fresh" = fresh `lean` per checkpoint (default). "warm" = in-repo warm server
     # (Mathlib resident, paid once) — for a Mathlib prelude. See INTEGRATION.md.
     verifier_backend: str = "fresh"
-    warm_binary: str = ""        # path to midas_proof_verifier `warm` exe (warm backend only)
+    warm_binary: str = ""        # optional path to `warm` exe; defaults to warm-server/.lake/build/bin/warm
     warm_lean_path: str = ""     # LEAN_PATH to the Mathlib oleans (warm backend only)
 
 
