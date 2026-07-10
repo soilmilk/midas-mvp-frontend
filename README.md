@@ -1,13 +1,12 @@
 # Midas MVP
 
 A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
-Lean theorem header, it drives two LLMs — a **reasoner** (proposes one small proof step) and a
-**translator** (renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
-is proved with no `sorry`, or a budget is exhausted. Every step is checked by the real Lean compiler
-in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (phases 1–5); see
-`NOTES.md`, `PHASE4_REPORT.md`, and `LEMMA_FIRST_ANALYSIS.md` for build/run findings.
+Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small proof step) and a
+**translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
+is proved with no `sorry`, or a budget is exhausted. Every step is checked by the Lean compiler
+in accumulated context. 
 
-> **Training / modifying it:** the intended way to improve behavior is to evolve the two prompt files
+> **Training / modifying it:** the intended way to improve behavior is to improve the two prompt files
 > in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for
 > that workflow; this README is how to *run and extend* the system.
 
