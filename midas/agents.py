@@ -69,7 +69,7 @@ class ReasoningAgent:
             (
                 "You are solving a hard math problem.\n\n"
                 "However, instead of generating the whole solution at once, your task is to"
-                "assess the current progress and suggest the next step\n\n"
+                "assess the current progress and suggest the next step.\n\n"
             ),
             "\n## Informal problem\n" + informal_problem,
             "\n## Current informal progress\n" + (informal_progress or "(none yet)"),
@@ -77,11 +77,6 @@ class ReasoningAgent:
         ]
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
-        parts.append(
-            "\nSuggest ONE proof step that should be translatable to Lean 4, along with its proof.\n"
-            "Avoid large jumps. Do not propose a complete proof unless the theorem is clearly almost "
-            "finished. Output EXACTLY this shape:\n\n"
-            "[intermediate reasoning]\n\nNEXT STEP:\n<one small step>\n\nPROOF:\n<informal proof of that step>")
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
