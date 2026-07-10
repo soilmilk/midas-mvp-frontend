@@ -241,6 +241,9 @@ The system's behavior is shaped by two prompt files the models read on every cal
 - `considerations/INFORMAL_REASONING_CONSIDERATIONS.md` — rules for the reasoner (§9).
 - `considerations/FORMAL_TRANSLATION_CONSIDERATIONS.md` — rules for the translator (§10).
 
+NOTE: When testing/running proofs, please put your findings here instead of directly editing the prompts, we will accumulate all of y'alls feedback and then edit accordingly.
+https://docs.google.com/document/d/1dXjaZKxNOavIGCYk2uyY2fPjsBhnSYR5mQ_5L5mlsu0/edit?usp=sharing
+
 **To improve it, edit those files** based on failures you see in `runs/`. The disciplined process
 for doing that (batch review, when to add a rule, versioning, guardrails) is the *metaoptimizing
 loop* — **see `HANDOFF.md`**, plus `EXTERNAL_AGENT_SUGGESTIONS.md` (proposed edits, seeded from the
