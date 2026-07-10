@@ -73,7 +73,7 @@ class ReasoningAgent:
             ),
             "\n## Informal problem\n" + informal_problem,
             "\n## Current informal progress\n" + (informal_progress or "(none yet)"),
-        #     "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
+        #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
