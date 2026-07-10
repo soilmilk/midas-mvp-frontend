@@ -10,3 +10,4 @@ secrets*
 runs/
 */runs/
 .test_runs/
+.DS_Store
