@@ -13,29 +13,8 @@ in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (
 
 ---
 
-## How it works (30-second version)
-
-```
-informal problem + Lean header
-        │
-        ▼
-  ReasoningAgent (gpt-5)         "here is one small next step + its proof"
-        │
-        ▼
-  TranslationAgent (claude)      NEW DECLARATIONS + UPDATED THEOREM BODY (Lean)
-        │
-        ▼
-  OutputParser → StructureChecker → VerifierClient (fresh `lean` per checkpoint)
-        │                                    │
-   parse_error / format_failed          declaration check (no sorry)
-                                         body check (sorry allowed)
-        │                                    │
-        ▼                                    ▼
-   retry w/ feedback                accept step (lemma folds in) → next step
-                                    or, if body has no sorry → reconstruct
-                                    the whole file & compile it independently
-                                    → final_success
-```
+## Layout
+![Alt Text](midas-mvp.png)
 
 Two files evolve per step: a **declaration delta** (`declarations.lean`, new lemmas/defs, no
 `sorry`) that accumulates, and the **full theorem body** (`body.lean`, `sorry` allowed until the
