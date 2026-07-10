@@ -8,7 +8,7 @@ in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (
 `NOTES.md`, `PHASE4_REPORT.md`, and `LEMMA_FIRST_ANALYSIS.md` for build/run findings.
 
 > **Training / modifying it:** the intended way to improve behavior is to evolve the two prompt files
-> in `considerations/` from observed run failures — the metaoptimizing loop. **Read `HANDOFF.md`** for
+> in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for
 > that workflow; this README is how to *run and extend* the system.
 
 ---
@@ -16,9 +16,6 @@ in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (
 
 ![Alt Text](midas-mvp.png)
 
-Two files evolve per step: a **declaration delta** (`declarations.lean`, new lemmas/defs, no
-`sorry`) that accumulates, and the **full theorem body** (`body.lean`, `sorry` allowed until the
-end). Only accepted artifacts are used to reconstruct the final proof.
 
 ---
 
