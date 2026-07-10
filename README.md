@@ -192,20 +192,8 @@ export MIDAS_WARM_LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env prin
 ## Artifact layout
 
 Everything a run produces (and everything the metaoptimizer feeds on) is under `runs/<id>/`:
-```
-runs/<id>/
-  config.json  state.json
-  input/            (copied inputs + context_check.json / initial_body_check.json)
-  artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md, informal_step.md}
-                                    /lean4_attempt_NNN/{translator_prompt.md, raw_translator_output.md,
-                                                        declarations.lean, body.lean, compile.json}
-  accepted/proof_step_NNN/{declarations.lean, body.lean}     # the accepted path only
-  final/{solution.lean, solution.md}                # on success
-  failure/{failure_report.md, last_verified.lean, last_body.lean}   # on failure
-```
-`runs/` is git-ignored (it's generated). `compile.json` diagnostics are structured:
-`{file, line, col, severity, code, message}` — `code` is the Lean diagnostic code (e.g.
-`lean.unknownIdentifier`) for bucketing failures without regexing prose.
+
+<img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
 ---
 
