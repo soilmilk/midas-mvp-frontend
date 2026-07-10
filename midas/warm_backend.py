@@ -13,13 +13,11 @@ matches this backend's stateless `check()` (the loop passes `accepted_declaratio
   declaration check : context + accepted + candidate_declaration  → expect ACCEPT
   body check        : + candidate_body                            → ACCEPT (closed) / OPEN (sorry)
 
-⚠️ EXPERIMENTAL — UNVALIDATED. This adapter is the documented integration point (INTEGRATION.md),
-not a validated path. It has NOT been run end-to-end (the current problems are Core/Std, so nothing
-exercises a Mathlib prelude). Before relying on it: (1) point `config.warm_binary` /
-`config.warm_lean_path` at a built `midas_proof_verifier` warm exe + a Mathlib LEAN_PATH;
-(2) run a Mathlib-prelude problem and check the verdicts against FreshCompileBackend on a shared
-core case; (3) recommended hardening — have `warm` print a per-response sentinel line (e.g. `%%DONE`)
-so response boundaries don't rely on scanning for the next `[node …]` line.
+VALIDATED (2026-07-09): verdicts match FreshCompileBackend on shared Mathlib cases (sorry body,
+partial proof, broken body). To use: point `config.warm_binary` / `config.warm_lean_path` (or
+`$MIDAS_WARM_BINARY` / `$MIDAS_WARM_LEAN_PATH`) at a built `midas_proof_verifier` warm exe + a Mathlib
+LEAN_PATH, and set `verifier_backend: "warm"`. Optional hardening: have `warm` print a per-response
+sentinel (`%%DONE`) so `_submit()` needn't scan for the next `[node …]` line.
 """
 from __future__ import annotations
 import os, re, subprocess, time
@@ -44,7 +42,7 @@ class WarmTxnBackend:
                 "built midas_proof_verifier `warm` executable, and config.warm_lean_path (or "
                 "$MIDAS_WARM_LEAN_PATH) with the Mathlib LEAN_PATH. See INTEGRATION.md.")
         self._lib = "Mathlib" if any("Mathlib" in l for l in config.lean_prelude) else "Mathlib"
-        print("⚠️  WarmTxnBackend is EXPERIMENTAL/unvalidated — see midas/warm_backend.py header.")
+        print(f"[warm backend] loading {self._lib} once via {os.path.basename(binary)} …", flush=True)
         env = os.environ.copy()
         if lean_path:
             env["LEAN_PATH"] = lean_path

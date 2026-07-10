@@ -55,7 +55,14 @@ is ≈ **2 checkpoints** — so for any real (Mathlib) proof, the warm backend i
    (or set `$MIDAS_WARM_BINARY` / `$MIDAS_WARM_LEAN_PATH`).
 3. Run as usual: `python3 -m midas.cli run problems/<mathlib_problem>`.
 
-## Status — EXPERIMENTAL
+## Status — VALIDATED (2026-07-09)
+`WarmTxnBackend` verdicts were diffed against `FreshCompileBackend` on shared Mathlib cases (sorry
+body / partial proof / broken body) — identical. First real use: **p4_n5_30 (`30 ∣ n⁵−n`) reached
+`final_success` on the warm backend in 770 s (13 steps), where the `fresh` backend timed out at 12
+steps in 1240 s** — the difference was per-checkpoint `import Mathlib` (~36 s × 34) vs one ~7 s load.
+Original experimental notes kept below for reference.
+
+### Original notes
 `midas/warm_backend.py` is the documented adapter but is **unvalidated**: the MVP problems are
 Core/Std, so nothing here has exercised a Mathlib prelude end-to-end. The MVP build scope
 deliberately kept the warm backend out; this adds the *seam* and a starting-point adapter, not a

@@ -100,6 +100,14 @@ Extra regression proofs added (all pass loop+verifier, replay-confirmed, final c
 t1_cube, t2_list, t3_bool, t4_le (+ p1_sanity). Note: `reasoning_effort=minimal` is too shallow even
 for `by decide` goals (t1 flailed on minimal, closed on low).
 
+## Warm backend validated + first Mathlib proof (2026-07-09)
+WarmTxnBackend (midas_proof_verifier `warm` exe, import-once) validated vs fresh on shared cases.
+p4_n5_30 (`30 ∣ n⁵−n`, prelude `import Mathlib`): fresh backend FAILED (max_runtime, 12 steps, 1240s,
+34 cold Mathlib compiles ~36s each = the whole budget). Warm backend: **final_success, 13 steps, 770s**
+(Mathlib loaded once ~7s, checkpoints ~ms; bottleneck became LLM latency). Generated proof compiles
+independently with no sorry. Loop now calls verifier.close() to reap the warm subprocess. Wire via
+config verifier_backend='warm' + $MIDAS_WARM_BINARY/$MIDAS_WARM_LEAN_PATH.
+
 ## Phase 5 — CLI (2026-07-09)
 midas/cli.py: run/status/attempts/show/replay (argparse). `replay` recompiles one checkpoint
 via the verifier only (no LLM). `attempts` shows a declarations? column that surfaces the

@@ -127,6 +127,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     def finish(reason=None):
         state.stats.runtime_seconds = _now() - start
         statemgr.save(state)
+        try: verifier.close()        # terminate the warm subprocess if the warm backend is in use
+        except Exception: pass
         return state
 
     # ---- input validation (§4) ----
