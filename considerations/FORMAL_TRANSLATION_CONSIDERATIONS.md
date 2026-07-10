@@ -16,13 +16,6 @@
   `by_contra`), leave `NEW DECLARATIONS` empty and change only the theorem body. Don't manufacture
   a lemma to wrap a tactic.
 
-## Copy the header exactly
-- Do not change the theorem name, binders, hypotheses, or conclusion. A single byte difference
-  (spacing, a renamed binder) fails the structure check before compilation. Only the proof moves.
-
-## This MVP is Core/Std only — no Mathlib
-- Do not use Mathlib lemmas or notation. Stay within Lean 4 core + Std. If a step seems to need
-  Mathlib, prefer a more elementary proof (`decide`, `rfl`, `omega`, `simp`, `Nat`/`List` core lemmas).
 
 ## Lean 4 core nuances
 - **Truncated `Nat` subtraction.** For `a b : Nat`, `a - b = 0` when `a < b`. If a step relies on
@@ -38,9 +31,6 @@
 - **Namespacing.** Declare lemmas in the same namespace as the theorem body, or they compile but
   are not found by name (shows up as an `unknownIdentifier` that looks like a missing lemma).
 
-## Flag uncertainty
-- If you invoke a lemma you are not confident exists in Core/Std, mark it with a comment
-  `-- verify: core/std name` so an `unknownIdentifier` failure is easy to triage.
 
 ## Examples
 *(placeholder — add 2–3 worked step→output pairs once real successful translations accumulate.)*
