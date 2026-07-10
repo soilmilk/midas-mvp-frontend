@@ -1,4 +1,4 @@
-# midas-mvp
+# Midas MVP
 
 A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
 Lean theorem header, it drives two LLMs — a **reasoner** (proposes one small proof step) and a
@@ -13,7 +13,7 @@ in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (
 
 ---
 
-## Layout
+
 ![Alt Text](midas-mvp.png)
 
 Two files evolve per step: a **declaration delta** (`declarations.lean`, new lemmas/defs, no
