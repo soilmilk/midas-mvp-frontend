@@ -66,13 +66,14 @@ class ReasoningAgent:
                      context_summary: str, accepted_decls_summary: str, current_body: str,
                      failure_feedback: str = "") -> str:
         parts = [
-            "You are advancing a Lean 4 proof one small step at a time.",
+            (
+                "You are solving a hard math problem.\n\n"
+                "However, instead of generating the whole solution at once, your task is to"
+                "assess the current progress and suggest the next step\n\n"
+            ),
             "\n## Informal problem\n" + informal_problem,
             "\n## Current informal progress\n" + (informal_progress or "(none yet)"),
-            "\n## Current knowledge\n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
-            "\n## Fixed Lean context (summary)\n" + context_summary,
-            "\n## Accepted Lean declarations so far\n" + (accepted_decls_summary or "(none)"),
-            "\n## Current theorem body\n```lean4\n" + current_body + "\n```",
+            "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
