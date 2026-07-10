@@ -74,7 +74,7 @@ Only `run` needs it.
   ```bash
   # Alternatively to these two commands, you can reuse any mathlib project if you have it
   cd /desired/mathlib_project/location # simple option: cd ~
-  lake +leanprover/lean4:v4.31.0 new mathlib_host math # shouldn't take more than 3 minutes
+  lake +leanprover/lean4:v4.31.0 new mathlib_host math # shouldn't take more than 2 minutes
 
   cd mathlib_host
   # make sure that lean-toolchain contains "leanprover/lean4:v4.31.0"
@@ -102,14 +102,15 @@ lake build warm
 cd ..
 
 # Save the Mathlib LEAN_PATH where midas-mvp's warm backend will read it automatically.
-(cd ~/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
+(cd path/to/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
+# ex: (cd ~/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
 ```
 
 **6. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
 OpenRouter's OpenAI-compatible API.
 ```bash
 # Assuming that you're still on the midas-mvp folder
-python3 -m venv .venv  # if it's a new EC2, might need to run 'sudo apt update' first
+python3 -m venv .venv  # if it's a new EC2, might need to run 'sudo apt update' before that
 source .venv/bin/activate
 pip install pydantic openai
 ```
@@ -122,12 +123,18 @@ python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
 python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
 ```
 
-**8. Run a real Mathlib proof** (needs your OpenRouter key).
+**8. Run a real Lean 4 problem** (needs your OpenRouter key).
 ```bash
 source ~/.midas-mvp.env
-python3 -m midas.cli run problems/p4_n5_30
+
+# The first real run. As the proof progresses, take a look at runs/p4_n5_30/artifacts/proof_steps.
+# You will see the loop happening in real time! 
+python3 -m midas.cli run p4_n5_30
+
+# Alternatively, you can run this command from another terminal:
 python3 -m midas.cli status p4_n5_30
 ```
+
 
 ---
 
