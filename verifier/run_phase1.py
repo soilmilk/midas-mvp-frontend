@@ -77,13 +77,16 @@ all_ok &= leak_ok
 print(f"\nPHASE 1 GATE: {'PASS — proceed to Phase 2' if all_ok else 'FAIL — fix the verifier'}")
 
 # ---------- negative-test detail ----------
-print("\n" + "=" * 76)
-print("NEGATIVE TEST — raw declaration-check output + parsed structured diagnostics:")
-print("=" * 76)
-print(neg.declaration_raw.rstrip())
-print("-" * 76)
-for e in neg.declaration_check.errors:
-    print(f"  {{ file:{e['file']!r} line:{e['line']} col:{e['col']} "
-          f"severity:{e['severity']!r} code:{e['code']!r} message:{e['message']!r} }}")
+# Keep successful setup output clean: the negative case intentionally produces
+# a Lean error, and the table above is the success signal for that check.
+if not all_ok:
+    print("\n" + "=" * 76)
+    print("NEGATIVE TEST — raw declaration-check output + parsed structured diagnostics:")
+    print("=" * 76)
+    print(neg.declaration_raw.rstrip())
+    print("-" * 76)
+    for e in neg.declaration_check.errors:
+        print(f"  {{ file:{e['file']!r} line:{e['line']} col:{e['col']} "
+              f"severity:{e['severity']!r} code:{e['code']!r} message:{e['message']!r} }}")
 
 sys.exit(0 if all_ok else 1)
