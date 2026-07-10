@@ -6,7 +6,9 @@
   "max_runtime_seconds": 1200,
   "lean_prelude": [
     "import Mathlib",
-    "set_option maxHeartbeats 400000"
+    "import Aesop",
+    "set_option maxHeartbeats 0",
+    "open BigOperators Real Nat Topology Rat"
   ],
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",

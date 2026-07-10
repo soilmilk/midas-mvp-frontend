@@ -43,62 +43,142 @@ end). Only accepted artifacts are used to reconstruct the final proof.
 
 ---
 
-## Setup & running
+## Setup & running (Ubuntu environment)
 
-> ⚠️ **Run every command from the repo root** — the `midas-mvp/` folder that contains `midas/`.
-> `python3 -m midas.cli` imports the `midas` package from the current directory; from anywhere else
-> you get `ModuleNotFoundError: No module named 'midas'`. This is the #1 setup gotcha.
+**1. Add your OpenRouter API key**
+You will need to create your own key and buy credits on OpenRouter ($10 should be enough), or alternatively reach out to Daniel to share his API key.
+It should never be committed to the repo. 
+Only `run` needs it.
 
-**1. Install Lean 4 (via elan) — one time.** `lean-toolchain` pins `leanprover/lean4:v4.31.0`.
+  ```bash
+  echo "export OPENROUTER_API_KEY='sk-or-...'" > ~/.midas-mvp.env && chmod 600 ~/.midas-mvp.env
+  ```
+
+**2. Install Lean 4 (via elan - the Lean toolchain manager):**
+  ```bash
+  curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
+  ```
+  Choose option 1) Proceed with installation (default)
+  After installation, restart your shell or run:
+
+  ```bash
+  source "$HOME/.elan/env"
+  ```
+  Verify that `elan` is available:
+
+  ```bash
+  elan --version
+  ```
+
+**3. Install a prebuilt Mathlib for v4.31.0:**
+  ```bash
+  # Alternatively to these two commands, you can reuse any mathlib project if you have it
+  cd /desired/mathlib_project/location # simple option: cd ~
+  lake +leanprover/lean4:v4.31.0 new mathlib_host math # shouldn't take more than 3 minutes
+
+  cd mathlib_host
+  # make sure that lean-toolchain contains "leanprover/lean4:v4.31.0"
+  # make sure that lakefile.toml has a "[[require]]" section with name = "mathlib" and rev = "v4.31.0"
+  lake exe cache get        # downloads prebuilt Mathlib oleans (minutes, not hours)
+  lake build
+
+  ```
+
+**4. Clone, and install the toolchain on first `lean` call.**
 ```bash
-curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
-source "$HOME/.elan/env"        # or restart the shell
+# Assuming that you're still on the mathlib_host folder
+cd ..
+git clone https://github.com/soilmilk/midas-mvp.git
+cd midas-mvp                    # <-- run everything below from here
+lean --version                  # Should print something that starts with "Lean (version 4.31.0."
 ```
 
-**2. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
+**5. Install Python deps** (Python 3.9+). `openai` handles *all* calls — both models route through
 OpenRouter's OpenAI-compatible API.
 ```bash
+# Assuming that you're still on the midas-mvp folder
+python3 -m venv .venv  # if it's a new EC2, might need to run 'sudo apt update' first
+source .venv/bin/activate
 pip install pydantic openai
 ```
 
-**3. Clone, and install the toolchain on first `lean` call.**
-```bash
-git clone https://github.com/soilmilk/midas-mvp.git
-cd midas-mvp                    # <-- run everything below from here
-lean --version                  # first run downloads Lean v4.31.0 (one-time). Must print 4.31.0
-```
 
-**4. Add your OpenRouter key** (each person uses their own; it is never committed — only `run` needs it).
-```bash
-echo "export OPENROUTER_API_KEY='sk-or-...'" > ~/.midas-mvp.env && chmod 600 ~/.midas-mvp.env
-```
-
-**5. Verify the install — NO key needed** (proves Lean + Python are wired up correctly).
+**6. Testing the install — NO key needed** (proves Lean + Python are wired up correctly).
 ```bash
 python3 verifier/run_phase1.py       # must end: PHASE 1 GATE: PASS
 python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
 python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
 ```
 
-**6. Run a real proof** (the Core/Std problems need only the key).
+**7. Run a real proof** (the Core/Std problems need only the key).
 ```bash
 source ~/.midas-mvp.env
 python3 -m midas.cli run problems/p1_sanity
 python3 -m midas.cli status p1_sanity
 ```
 
+---
+
+## Adding a problem of your own
+
+Create `problems/<id>/` with an `input/` dir and a `config.json`:
+
+```
+problems/<id>/
+  input/
+    informal_problem.md     # the natural-language statement
+    context.lean            # definitions the theorem needs — NO imports (prelude supplies them)
+    body_initial.lean       # theorem <name> ... := by\n  sorry   (must end the header in ':= by')
+  config.json
+  reference_solution.lean   # OPTIONAL; documents provability (the loop never reads it)
+```
+
+Rules that matter:
+- `context.lean` are the definitions/object that the theorem uses. Contains **no imports** (put imports in `lean_prelude`).
+- `body_initial.lean` must contain exactly one theorem whose header ends in **`:= by`** (the loader
+  fails loudly otherwise). That header is stored and enforced **byte-for-byte** on every later body.
+- See problems/p3_imo for an example.
+
+- example for `config.json`:
+```json
+{
+  "max_proof_steps": 8,
+  "max_informal_candidates_per_proof_step": 3,
+  "max_lean_translation_attempts_per_candidate": 3,
+  "max_total_lean_attempts": 60,
+  "max_runtime_seconds": 900,
+  "lean_prelude": [
+    "import Mathlib",
+    "import Aesop",
+    "set_option maxHeartbeats 0",
+    "open BigOperators Real Nat Topology Rat"
+  ],
+  "reasoning_model": "openai/gpt-5",
+  "translation_model": "anthropic/claude-sonnet-5",
+  "reasoning_effort": "low"
+}
+```
+- `lean_prelude` — **full Lean lines**, prepended verbatim (e.g. `"import Mathlib"`, `"set_option maxHeartbeats 0"`).
+- `reasoning_effort` — `minimal | low | medium | high`. **Biggest latency lever**: gpt-5 is a reasoning model (≈1.5 s at `minimal`, ≈6 s at `low`, ≈10–13 s default). `minimal` = zero reasoning tokens (fast but shallow). See `NOTES.md`.
+
+--- 
+
+
 ### Running a Mathlib problem
-The bundled problems are **Core/Std — no Mathlib**. A problem whose `config.json` puts `import Mathlib…`
-in `lean_prelude` **also needs Mathlib on `LEAN_PATH`**, or you'll get `unknown module prefix 'Mathlib'`
-(a clean `context_failed`, not a crash). Point at a **prebuilt v4.31.0 Mathlib** (must match
-`lean-toolchain`), then run:
+
 ```bash
+# The mathlib_project must be the **prebuilt v4.31.0 Mathlib** (must match `lean-toolchain`)
+
+# ex: export LEAN_PATH="$(cd ~/mathlib_host && lake env printenv LEAN_PATH)"
 export LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env printenv LEAN_PATH)"
 source ~/.midas-mvp.env
-python3 -m midas.cli run problems/<mathlib_problem>
+
+# ex: python3 -m midas.cli run p4_n5_30
+python3 -m midas.cli run <mathlib_problem>
 ```
 With the default `fresh` backend, every checkpoint cold-compiles Mathlib (~seconds each) — slow over
 many steps. For heavy Mathlib work, switch to the **warm backend** ([INTEGRATION.md](INTEGRATION.md)).
+
 
 ### Troubleshooting
 | symptom | cause | fix |
@@ -112,69 +192,7 @@ many steps. For heavy Mathlib work, switch to the **warm backend** ([INTEGRATION
 
 ---
 
-## CLI reference
-
-All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<problem_id>/`
-(override the location with `--runs-root DIR`).
-
-| command | what it does |
-|---|---|
-| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree + `state.json`. |
-| `status <problem_id>` | Status, theorem header, stats, and a per-proof-step summary. |
-| `attempts <problem_id> [--step N] [--failed-only]` | Table of every translation attempt and its status; the `declarations?` column shows whether the step introduced a lemma. |
-| `show <problem_id> <step> <cand> <attempt>` | Dump one attempt's reasoning prompt, translator prompt, **raw model output**, parsed `declarations.lean`/`body.lean`, and `compile.json`. |
-| `replay <problem_id> <step> <cand> <attempt>` | **Recompile that one checkpoint via the verifier only — no LLM call.** For debugging a failure without burning API calls. |
-
-Examples:
-```bash
-python3 -m midas.cli attempts p2_lemma --failed-only
-python3 -m midas.cli show p3_imo 4 1 1        # ps004 / candidate 1 / attempt 1
-python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
-```
-
----
-
-## Adding a problem
-
-Create `problems/<id>/` with an `input/` dir and a `config.json`:
-
-```
-problems/<id>/
-  input/
-    informal_problem.md     # the natural-language statement
-    context.lean            # definitions the theorem needs — NO imports (prelude supplies them)
-    body_initial.lean       # theorem <name> ... := by\n  sorry   (must end the header in ':= by')
-  config.json
-  reference_solution.lean   # optional; documents provability (the loop never reads it)
-```
-
-Rules that matter:
-- `context.lean` is **immutable** and contains **no imports** (put imports in `lean_prelude`).
-- `body_initial.lean` must contain exactly one theorem whose header ends in **`:= by`** (the loader
-  fails loudly otherwise). That header is stored and enforced **byte-for-byte** on every later body.
-- Keep it **Core/Std-provable** unless you add a Mathlib prelude (which makes every compile slow —
-  see "Mathlib" below).
-
-`config.json` (SPEC §2):
-```json
-{
-  "max_proof_steps": 8,
-  "max_informal_candidates_per_proof_step": 3,
-  "max_lean_translation_attempts_per_candidate": 3,
-  "max_total_lean_attempts": 60,
-  "max_runtime_seconds": 900,
-  "lean_prelude": [],
-  "reasoning_model": "openai/gpt-5",
-  "translation_model": "anthropic/claude-sonnet-5",
-  "reasoning_effort": "low"
-}
-```
-- `lean_prelude` — **full Lean lines**, prepended verbatim (e.g. `"import Mathlib"`, `"set_option maxHeartbeats 0"`). Empty for Core/Std.
-- `reasoning_effort` — `minimal | low | medium | high`. **Biggest latency lever**: gpt-5 is a reasoning model (≈1.5 s at `minimal`, ≈6 s at `low`, ≈10–13 s default). `minimal` = zero reasoning tokens (fast but shallow). See `NOTES.md`.
-
----
-
-## Artifact layout (SPEC §6)
+## Artifact layout
 
 Everything a run produces (and everything the metaoptimizer feeds on) is under `runs/<id>/`:
 ```
@@ -194,7 +212,7 @@ runs/<id>/
 
 ---
 
-## Attempt statuses (SPEC §17)
+## Attempt statuses
 
 `pending · parse_error · format_failed · lemma_failed · body_failed · accepted · final_success · final_reconstruction_failed`
 
@@ -203,6 +221,32 @@ runs/<id>/
 - **`lemma_failed` / `body_failed`** — the declaration / body compile failed.
 - **`accepted`** — both compile, body still has `sorry` (progress).
 - **`final_success`** — body has no `sorry` and the independently reconstructed `final/solution.lean` compiles clean.
+
+---
+
+## CLI reference
+
+> ⚠️ **Run every command from the repo root** — the `midas-mvp/` folder that contains `midas/`.
+> `python3 -m midas.cli` imports the `midas` package from the current directory; from anywhere else
+> you get `ModuleNotFoundError: No module named 'midas'`.
+
+All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<problem_id>/`
+(override the location with `--runs-root DIR`).
+
+| command | what it does |
+|---|---|
+| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree + `state.json`. |
+| `status <problem_id>` | Status, theorem header, stats, and a per-proof-step summary. |
+| `attempts <problem_id> [--step N] [--failed-only]` | Table of every translation attempt and its status; the `declarations?` column shows whether the step introduced a lemma. |
+| `show <problem_id> <step> <cand> <attempt>` | Dump one attempt's reasoning prompt, translator prompt, **raw model output**, parsed `declarations.lean`/`body.lean`, and `compile.json`. |
+| `replay <problem_id> <step> <cand> <attempt>` | **Recompile that one checkpoint via the verifier only — no LLM call.** For debugging a failure without burning API calls. |
+
+Examples:
+```bash
+python3 -m midas.cli attempts p2_lemma --failed-only
+python3 -m midas.cli show p3_imo 4 1 1        # ps004 / candidate 1 / attempt 1
+python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
+```
 
 ---
 
