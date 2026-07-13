@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
+from .reconstructor import reconstruct
+
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
@@ -98,8 +100,11 @@ class TranslationAgent:
         self.offline = offline_responses
         self.max_tokens = max_tokens
 
-    def build_prompt(self, header: str, context: str, accepted_decls: str, current_body: str,
+    def build_prompt(self, header: str, prelude: List[str], context: str,
+                     accepted_decls: List[str], current_body: str,
                      informal_candidate: str, compiler_feedback: str = "") -> str:
+        current_file = reconstruct(prelude, context, accepted_decls,
+                                   "-- Current theorem body\n" + (current_body or "").strip())
         parts = [
             (
                 "You are part of a system that converts an English mathematical proof into a Lean 4 proof.\n\n"
@@ -109,10 +114,12 @@ class TranslationAgent:
                 "1. adding new Lean lemmas or definitions, and/or\n"
                 "2. replacing the current theorem body with an updated theorem body.\n\n"
             ),
-            "\n## Original formal theorem header (copy EXACTLY, byte-for-byte)\n```\n" + header + "\n```",
-            "\n## Fixed input/context.lean (already available, do not restate/import)\n```lean4\n" + context + "\n```",
-            "\n## Current accepted Lean declarations (available; do not repeat)\n" + (accepted_decls or "(none)"),
-            "\n## Current theorem body\n```lean4\n" + current_body + "\n```",
+            "\n## Current Lean 4 file\n```lean4\n" + current_file + "```",
+            (
+                "\nThe line `-- Current theorem body` marks the theorem body you may replace. "
+                "Add any new lemmas or definitions before that theorem body. Do not repeat imports, "
+                "context definitions, or already accepted declarations in NEW DECLARATIONS."
+            ),
             "\n## Informal step to translate (with its proof)\n" + informal_candidate,
         ]
         if compiler_feedback:
@@ -123,7 +130,8 @@ class TranslationAgent:
             "UPDATED THEOREM BODY:\n\n```\n<full theorem declaration, header copied exactly, only the "
             "proof after ':= by' changed>\n```\n\n"
             "Rules: NEW DECLARATIONS is a delta (may be empty), no sorry, no imports, don't repeat "
-            "accepted declarations. UPDATED THEOREM BODY is the complete theorem, header byte-exact, "
+            "accepted declarations. UPDATED THEOREM BODY is the complete theorem, header byte-exact "
+            f"(`{header}`), "
             "may contain sorry unless this is the final step.")
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
