@@ -9,7 +9,8 @@
 
 Follow this structure for the output:
 
-[intermediate reasoning]
+INTERMEDIATE REASONING:
+<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>
 
 NEXT STEP:
 <one step>
