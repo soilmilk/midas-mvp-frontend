@@ -127,8 +127,10 @@ python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
 ```bash
 source ~/.midas-mvp.env
 
-# The first real run. As the proof progresses, take a look at runs/p4_n5_30/artifacts/proof_steps.
-# You will see the loop happening in real time! 
+# The first real run.
+# As the proof progresses, take a look at runs/p4_n5_30/artifacts/proof_steps.
+# You will see the loop happening in real time!
+# Due to loading mathlib, it could take several minutes.
 python3 -m midas.cli run p4_n5_30
 
 # Alternatively, you can run this command from another terminal:
