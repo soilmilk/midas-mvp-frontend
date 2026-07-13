@@ -1,36 +1,67 @@
-
-## Output structure (hard requirement)
-- Output the two required sections, in this order, each as a fenced code block:
-  `NEW DECLARATIONS:` then `UPDATED THEOREM BODY:`. Intermediate reasoning before them is fine.
-- `NEW DECLARATIONS` is a **delta**: only new lemmas/defs, each with a descriptive comment. It
-  may be **empty** if only the theorem body changes. It must contain **no `sorry`** and must not
-  repeat previously accepted declarations.
-- `UPDATED THEOREM BODY` is the **complete** theorem declaration, not a delta. Copy the original
-  header **byte-for-byte**; change only the proof after `:= by`. It may contain `sorry` on
-  intermediate steps; on the final step it must not.
-- Neither section may contain `import` lines (the prelude supplies them; context and accepted
-  declarations are already available).
-
-## Structure-only steps
-- If the step only restructures the proof (induction setup, `rcases`/`by_cases`, `intro`/`obtain`,
-  `by_contra`), leave `NEW DECLARATIONS` empty and change only the theorem body. Don't manufacture
-  a lemma to wrap a tactic.
-
-
 ## Lean 4 core nuances
 - **Truncated `Nat` subtraction.** For `a b : Nat`, `a - b = 0` when `a < b`. If a step relies on
   signed subtraction, restate with addition (`a = b + c`) or cast to `Int`.
-- **Decidable goals.** Concrete `Nat`/`Bool` (in)equalities close with `by decide`; concrete
-  arithmetic with `by decide` or `rfl`; linear arithmetic over `Nat`/`Int` with `by omega`. Avoid
-  `native_decide` — it adds non-standard axioms.
-- **Term vs tactic mode.** Use `by ...` for anything with case splits, induction, or multiple
-  steps; reserve one-line term proofs for direct applications.
-- **Closing tactic choice.** `rfl`/`decide` for definitional/decidable goals, `omega` for linear
-  arithmetic, `simp [lemma1, lemma2]` only with named lemmas (bare `simp` on an underspecified goal
-  is a common "tactic failed"). Match the tactic to the goal shape.
-- **Namespacing.** Declare lemmas in the same namespace as the theorem body, or they compile but
-  are not found by name (shows up as an `unknownIdentifier` that looks like a missing lemma).
+
+## NEW DECLARATIONS can also have definitions
+
+## Exception where NEW DECLARATIONS is empty
+- There is an exception in which you can leave `NEW DECLARATIONS` empty: if the step only restructures the proof (induction setup, `rcases`/`by_cases`, `intro`/`obtain`, `by_contra`), change only the theorem body. Don't manufacture
+  a lemma to wrap a tactic.
+
+Example:
+
+### Current Lean 4 file
+
+```lean4
+import Mathlib
+import Aesop
+set_option maxHeartbeats 0
+open BigOperators Real Nat Topology Rat
+
+-- Current theorem body
+-- The sum of the first `n` odd natural numbers is `n²`.
+theorem sum_first_n_odds (n : ℕ) :
+    (∑ k in Finset.range n, (2 * k + 1)) = n ^ 2 := by
+  sorry
+```
+
+### Informal step to translate
+
+```text
+STEP 1: We will use induction on n.
+
+PROOF:
+
+We proceed by induction on n.
+
+The base case is n = 0.
+
+For the induction step, assume the result holds for n and prove it for n + 1.
+```
+
+### Expected output
+
+INTERMEDIATE REASONING:
+This step only introduces the induction structure. It does not establish a
+separate reusable mathematical fact, so no new declaration is needed. The
+theorem body is updated with a base case, an induction hypothesis, and an
+inductive case. The individual cases remain unfinished because later informal
+steps will prove them.
+
+NEW DECLARATIONS:
+(none)
+
+UPDATED THEOREM BODY:
+
+```lean4
+-- Current theorem body
+theorem sum_first_n_odds (n : ℕ) :
+    (∑ k in Finset.range n, (2 * k + 1)) = n ^ 2 := by
+  induction n with
+  | zero =>
+      sorry
+  | succ n ih =>
+      sorry
+```
 
 
-## Examples
-*(placeholder — add 2–3 worked step→output pairs once real successful translations accumulate.)*

@@ -113,11 +113,29 @@ class TranslationAgent:
                 "You may do this by:\n"
                 "1. adding new Lean lemmas or definitions, and/or\n"
                 "2. replacing the current theorem body with an updated theorem body.\n\n"
+                "Your task is to do the following:\n"
+                "- Reason about the current Lean 4 file below, along with the next English "
+                "step, and what steps can be done to translate the next English step to "
+                "Lean 4, while following translation structure of adding new lemmas and "
+                "updating the theorem body.\n"
+                "- Output your new lemmas in a section called NEW DECLARATIONS. These "
+                "lemmas will be added to the Lean 4 file and can depend on previous lemmas.\n"
+                "- Output the updated theorem body in a section called UPDATED THEOREM "
+                "BODY. Keep the statement exactly the same - only the proof can be changed.\n\n"
+                "Follow this structure for the output:\n\n"
+                "INTERMEDIATE REASONING:\n"
+                "<intermediate reasoning - assess the current Lean 4 file and next English "
+                "step, and reason about how to translate to Lean 4>\n\n"
+                "NEW DECLARATIONS:\n"
+                "<New lemmas along with their proofs>\n\n"
+                "UPDATED THEOREM BODY:\n"
+                "<Updated theorem body - only the proof can be changed>\n"
             ),
             "\n## Current Lean 4 file\n```lean4\n" + current_file + "```",
             (
-                "\nThe line `-- Current theorem body` marks the theorem body you may replace. "
-                "Add any new lemmas or definitions before that theorem body. Do not repeat imports, "
+                "\nThe line `-- Current theorem body` marks the theorem body."
+                "Your new lemmas and/or definitions in NEW DECLARATIONS will be added " 
+                "before that theorem body. Do not repeat imports, "
                 "context definitions, or already accepted declarations in NEW DECLARATIONS."
             ),
             "\n## Informal step to translate (with its proof)\n" + informal_candidate,
