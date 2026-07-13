@@ -99,9 +99,15 @@ python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
 ```
 
 **8. Run a real Lean 4 problem** (needs your OpenRouter key).
+Every time you reopen the workspace, run the following commands:
 ```bash
+cd path/to/midas-mvp/
+source .venv/bin/activate
 source ~/.midas-mvp.env
+```
 
+Then you can run the following:
+```
 # The first real run.
 # As the proof progresses, take a look at runs/p4_n5_30/artifacts/proof_steps.
 # You will see the loop happening in real time!
