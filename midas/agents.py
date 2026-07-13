@@ -74,7 +74,7 @@ class ReasoningAgent:
                 "assess the current progress and suggest the next step.\n"
             ),
             "\n## Informal problem\n" + informal_problem,
-            "\n## Current informal progress (assume everything here has been already proved)\n" + (informal_progress or "(none yet)"),
+            "\n## Current progress (assume everything here has been already proved)\n" + (informal_progress or "(none yet)"),
         #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
         if failure_feedback:

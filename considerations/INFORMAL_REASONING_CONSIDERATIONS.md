@@ -1,6 +1,6 @@
 ## Output structure
 
-- Suggest ONE proof step that should be translatable to Lean 4, along with its proof.
+- Suggest ONE proof step along with its proof.
 - Avoid large jumps. Prefer a step that introduces one named intermediate fact about one object over a step that
   combines several (the loop will combine them later). 
 
@@ -27,3 +27,4 @@ PROOF:
 ## Common sense
 - Don't restate the current goal as the step. The step must change the proof state.
 - Don't propose a step whose PROOF is "by the previous lemma" without saying which and how.
+- The "NEXT STEP" section should be a proposition, rather than saying "Prove that [this property holds]"
