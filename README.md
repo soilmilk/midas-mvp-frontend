@@ -1,45 +1,20 @@
-# midas-mvp
+# Midas MVP
 
 A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
-Lean theorem header, it drives two LLMs — a **reasoner** (proposes one small proof step) and a
-**translator** (renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
-is proved with no `sorry`, or a budget is exhausted. Every step is checked by the real Lean compiler
-in accumulated context. Implements `SPEC.md` (the design doc). MVP is complete (phases 1–5); see
-`NOTES.md`, `PHASE4_REPORT.md`, and `LEMMA_FIRST_ANALYSIS.md` for build/run findings.
+Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small proof step) and a
+**translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
+is proved with no `sorry`, or a budget is exhausted. Every step is checked by the Lean compiler
+in accumulated context. 
 
-> **Training / modifying it:** the intended way to improve behavior is to evolve the two prompt files
-> in `considerations/` from observed run failures — the metaoptimizing loop. **Read `HANDOFF.md`** for
+> **Training / modifying it:** the intended way to improve behavior is to improve the two prompt files
+> in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for
 > that workflow; this README is how to *run and extend* the system.
 
 ---
 
-## How it works (30-second version)
 
-```
-informal problem + Lean header
-        │
-        ▼
-  ReasoningAgent (gpt-5)         "here is one small next step + its proof"
-        │
-        ▼
-  TranslationAgent (claude)      NEW DECLARATIONS + UPDATED THEOREM BODY (Lean)
-        │
-        ▼
-  OutputParser → StructureChecker → VerifierClient (fresh `lean` per checkpoint)
-        │                                    │
-   parse_error / format_failed          declaration check (no sorry)
-                                         body check (sorry allowed)
-        │                                    │
-        ▼                                    ▼
-   retry w/ feedback                accept step (lemma folds in) → next step
-                                    or, if body has no sorry → reconstruct
-                                    the whole file & compile it independently
-                                    → final_success
-```
+![Alt Text](midas-mvp.png)
 
-Two files evolve per step: a **declaration delta** (`declarations.lean`, new lemmas/defs, no
-`sorry`) that accumulates, and the **full theorem body** (`body.lean`, `sorry` allowed until the
-end). Only accepted artifacts are used to reconstruct the final proof.
 
 ---
 
@@ -218,20 +193,8 @@ export MIDAS_WARM_LEAN_PATH="$(cd /path/to/your/mathlib_project && lake env prin
 ## Artifact layout
 
 Everything a run produces (and everything the metaoptimizer feeds on) is under `runs/<id>/`:
-```
-runs/<id>/
-  config.json  state.json
-  input/            (copied inputs + context_check.json / initial_body_check.json)
-  artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md, informal_step.md}
-                                    /lean4_attempt_NNN/{translator_prompt.md, raw_translator_output.md,
-                                                        declarations.lean, body.lean, compile.json}
-  accepted/proof_step_NNN/{declarations.lean, body.lean}     # the accepted path only
-  final/{solution.lean, solution.md}                # on success
-  failure/{failure_report.md, last_verified.lean, last_body.lean}   # on failure
-```
-`runs/` is git-ignored (it's generated). `compile.json` diagnostics are structured:
-`{file, line, col, severity, code, message}` — `code` is the Lean diagnostic code (e.g.
-`lean.unknownIdentifier`) for bucketing failures without regexing prose.
+
+<img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
 ---
 
@@ -278,6 +241,9 @@ python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result of
 The system's behavior is shaped by two prompt files the models read on every call:
 - `considerations/INFORMAL_REASONING_CONSIDERATIONS.md` — rules for the reasoner (§9).
 - `considerations/FORMAL_TRANSLATION_CONSIDERATIONS.md` — rules for the translator (§10).
+
+NOTE: When testing/running proofs, please put your findings here instead of directly editing the prompts, we will accumulate all of y'alls feedback and then edit accordingly.
+https://docs.google.com/document/d/1dXjaZKxNOavIGCYk2uyY2fPjsBhnSYR5mQ_5L5mlsu0/edit?usp=sharing
 
 **To improve it, edit those files** based on failures you see in `runs/`. The disciplined process
 for doing that (batch review, when to add a rule, versioning, guardrails) is the *metaoptimizing
