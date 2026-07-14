@@ -98,6 +98,54 @@ except HeaderError as e:
 pf = parse_translator_output(MALFORMED)
 row("malformed output -> format_failed", (not pf.ok), pf.error)
 
+# ---- strict empty-declarations contract ----
+_BODY = "```lean4\ntheorem main : True := by trivial\n```"
+_EMPTY_DECLARATIONS = f"""NEW DECLARATIONS:
+```lean4
+```
+
+UPDATED THEOREM BODY:
+{_BODY}
+"""
+_EMPTY_UNLABELED_DECLARATIONS = f"""NEW DECLARATIONS:
+```
+```
+
+UPDATED THEOREM BODY:
+{_BODY}
+"""
+_NONE_DECLARATIONS = f"""NEW DECLARATIONS:
+(none)
+
+UPDATED THEOREM BODY:
+{_BODY}
+"""
+_MISSING_DECLARATIONS_FENCE = f"""NEW DECLARATIONS:
+
+UPDATED THEOREM BODY:
+{_BODY}
+"""
+_EXTRA_DECLARATIONS_TEXT = f"""NEW DECLARATIONS:
+No declarations are needed.
+```lean4
+```
+
+UPDATED THEOREM BODY:
+{_BODY}
+"""
+
+empty_decls = parse_translator_output(_EMPTY_DECLARATIONS)
+row("empty lean4 declarations fence parses", empty_decls.ok and empty_decls.declarations == "", empty_decls.error)
+empty_unlabeled = parse_translator_output(_EMPTY_UNLABELED_DECLARATIONS)
+row("empty unlabeled declarations fence parses", empty_unlabeled.ok and empty_unlabeled.declarations == "", empty_unlabeled.error)
+for label, raw in [
+    ("(none) declarations rejected", _NONE_DECLARATIONS),
+    ("missing declarations fence rejected", _MISSING_DECLARATIONS_FENCE),
+    ("extra declarations prose rejected", _EXTRA_DECLARATIONS_TEXT),
+]:
+    parsed = parse_translator_output(raw)
+    row(label, not parsed.ok, parsed.error)
+
 # ---- run the toy through the deterministic spine ----
 accepted_decls = []
 final_status = "running"

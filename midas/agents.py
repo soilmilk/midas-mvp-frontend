@@ -56,7 +56,7 @@ def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None
 # ---------------- ReasoningAgent (§9) ----------------
 class ReasoningAgent:
     def __init__(self, model: str, considerations: str,
-                 offline_responses: Optional[List[str]] = None, max_tokens: int = 16000,
+                 offline_responses: Optional[List[str]] = None, max_tokens: int = 32000,
                  reasoning_effort: str = "low"):
         self.model = model
         self.considerations = considerations
@@ -74,7 +74,7 @@ class ReasoningAgent:
                 "assess the current progress and suggest the next step.\n"
             ),
             "\n## Problem statement:\n" + informal_problem,
-            "\n## Current progress (assume everything here has been already proved)\n" + (informal_progress or "(none yet)"),
+            "\n## Current progress (Assume everything in this section has been already proved)\n" + (informal_progress or "(none yet)"),
         #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
         if failed_next_step:
@@ -97,7 +97,7 @@ class ReasoningAgent:
 # ---------------- TranslationAgent (§10) ----------------
 class TranslationAgent:
     def __init__(self, model: str, considerations: str,
-                 offline_responses: Optional[List[str]] = None, max_tokens: int = 8000):
+                 offline_responses: Optional[List[str]] = None, max_tokens: int = 32000):
         self.model = model
         self.considerations = considerations
         self.offline = offline_responses
@@ -130,7 +130,7 @@ class TranslationAgent:
                 "<intermediate reasoning - assess the current Lean 4 file and next English "
                 "step, and reason about how to translate to Lean 4>\n\n"
                 "NEW DECLARATIONS:\n"
-                "<New lemmas along with their proofs>\n\n"
+                "<New lemmas along with their proofs, inside a Lean 4 code fence>\n\n"
                 "UPDATED THEOREM BODY:\n"
                 "```lean4\n"
                 f"{header}\n"
@@ -145,7 +145,7 @@ class TranslationAgent:
                 "before that theorem body. Do not repeat imports, "
                 "context definitions, or already accepted declarations in NEW DECLARATIONS."
             ),
-            "\n## Informal step to translate (with its proof)\n" + informal_candidate,
+            "\n## English step to translate (with its proof)\n" + informal_candidate,
         ]
         if compiler_feedback:
             parts.append("\n## Compiler feedback from the previous attempt (fix this)\n" + compiler_feedback)

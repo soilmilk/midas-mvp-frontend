@@ -23,9 +23,13 @@ def _read(p): return open(p).read()
 def _now(): return time.time()
 
 
-def _extract_informal(text: str) -> str:
-    m = re.search(r"(?is)NEXT STEP:.*", text)
-    return m.group(0).strip() if m else text.strip()
+def _extract_informal(text: str) -> Optional[str]:
+    """Return the candidate beginning at NEXT STEP, or None when it is absent."""
+    text = text.strip()
+    if not text:
+        return ""
+    m = re.search(r"(?im)^\s*NEXT STEP:\s*", text)
+    return text[m.start():] if m else None
 
 
 def _extract_next_step(informal: str) -> str:
@@ -203,6 +207,30 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             ic.reasoning_prompt_path = os.path.join(paths.ic(i, j), "reasoning_prompt.md")
             ic.informal_step_path = os.path.join(paths.ic(i, j), "informal_step.md")
 
+            if informal_candidate is None:
+                last_error = "reasoning output was missing a NEXT STEP section"
+                bump("missing_next_step")
+                ic.status = "abandoned"
+                reasoning_feedback = (
+                    "The previous reasoning output was missing NEXT STEP. Emit one non-empty "
+                    "NEXT STEP with its PROOF."
+                )
+                failed_next_step = ""
+                statemgr.save(state)
+                continue
+
+            if not informal_candidate:
+                last_error = "reasoning output was empty"
+                bump("empty_informal_output")
+                ic.status = "abandoned"
+                reasoning_feedback = (
+                    "The previous reasoning output was empty. Emit one non-empty NEXT STEP "
+                    "with its PROOF."
+                )
+                failed_next_step = ""
+                statemgr.save(state)
+                continue
+
             candidate_accepted = False
             compiler_feedback = ""
             for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
@@ -277,7 +305,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     logger.copy_accepted(i, pr.declarations, pr.body)
                     accepted_decls.append(pr.declarations); latest_body = pr.body
                     state.stats.accepted_proof_steps += 1
-                    knowledge = _next_step_line(informal_candidate)
+                    knowledge = _extract_next_step(informal_candidate)
                     state.current_knowledge.append(knowledge)
                     informal_progress += f"\n- {knowledge}"
                     candidate_accepted = step_accepted = True
@@ -359,10 +387,6 @@ def _check_errs(vr):
 
 def _env_text(prelude, context, accepted_decls):
     return reconstruct(prelude, context, accepted_decls, "-- (theorem body omitted)")
-
-def _next_step_line(informal):
-    m = re.search(r"(?is)NEXT STEP:\s*(.+?)(?:\n\s*PROOF:|\Z)", informal)
-    return (m.group(1).strip().splitlines()[0] if m else informal.strip().splitlines()[0])[:200]
 
 def _solution_md(prob, state):
     return f"# Solution — {prob.problem_id}\n\nStatus: {state.status}\nAccepted steps: {state.stats.accepted_proof_steps}\n"

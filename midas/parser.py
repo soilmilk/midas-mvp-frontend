@@ -15,6 +15,12 @@ from typing import Optional
 
 # a fenced code block after a heading: ```[lang]\n ... \n```
 _FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+# NEW DECLARATIONS has a stricter contract: it is exactly one Lean 4 or
+# unlabeled fenced block. An empty block is the only representation of an
+# empty declaration delta.
+_DECLARATIONS_FENCE = re.compile(
+    r"\s*```(?:lean4)?[ \t]*\r?\n(.*?)```[ \t]*\s*", re.DOTALL
+)
 
 
 @dataclass
@@ -42,12 +48,38 @@ def _section_after(text: str, *headings) -> Optional[str]:
     return None
 
 
+def _heading(text: str, heading: str) -> Optional[re.Match]:
+    return re.search(rf"(?im)^\s*{re.escape(heading)}\s*:?\s*$", text)
+
+
+def _declarations_before_body(raw: str) -> tuple[Optional[str], str]:
+    """Parse the declarations delta without crossing into the body section."""
+    declarations_heading = _heading(raw, "NEW DECLARATIONS")
+    if not declarations_heading:
+        return None, "missing NEW DECLARATIONS section"
+
+    body_heading = _heading(raw, "UPDATED THEOREM BODY")
+    if not body_heading:
+        return None, "missing UPDATED THEOREM BODY section"
+    if body_heading.start() < declarations_heading.end():
+        return None, "UPDATED THEOREM BODY must appear after NEW DECLARATIONS"
+
+    declarations_region = raw[declarations_heading.end():body_heading.start()]
+    fence = _DECLARATIONS_FENCE.fullmatch(declarations_region)
+    if not fence:
+        return None, (
+            "NEW DECLARATIONS must contain exactly one lean4 or unlabeled "
+            "code fence; use an empty fence for no declarations"
+        )
+    return fence.group(1), ""
+
+
 def parse_translator_output(raw: str) -> ParseResult:
-    decls = _section_after(raw, "NEW DECLARATIONS")
+    decls, declarations_error = _declarations_before_body(raw)
     body = _section_after(raw, "UPDATED THEOREM BODY")
 
     if decls is None:
-        return ParseResult(False, None, None, "missing or unparseable NEW DECLARATIONS section")
+        return ParseResult(False, None, None, declarations_error)
     if body is None:
         return ParseResult(False, None, None, "missing or unparseable UPDATED THEOREM BODY section")
 

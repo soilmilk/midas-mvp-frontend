@@ -8,7 +8,7 @@ Verifies the §6 artifact tree, state.json, and status transitions.
 import os, sys, shutil, json
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from midas.loop import run_problem
+from midas.loop import run_problem, _extract_informal, _extract_next_step
 from midas.artifacts import StateManager
 
 PROB = os.path.join(ROOT, "problems", "toy")
@@ -19,6 +19,7 @@ def T(decls, body):
     return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\nUPDATED THEOREM BODY:\n\n```\n{body}\n```\n"
 
 reasoning = [
+    "",                                                                            # candidate1: empty reasoning output
     "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.",
     "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.",
     "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.",
@@ -45,16 +46,34 @@ checks.append(("final status == final_success", state.status == "final_success")
 checks.append(("accepted proof steps == 3", state.stats.accepted_proof_steps == 3))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
 checks.append(("final/solution.lean written", os.path.exists(os.path.join(root, "final", "solution.lean"))))
-# §6 layout: step1 candidate1 is exhausted and candidate2 is accepted.
-la1 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_001", "compile.json")
-la3 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_003", "compile.json")
-candidate2_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "reasoning_prompt.md")
-checks.append(("candidate1 exhausts three Lean attempts", os.path.exists(la1) and os.path.exists(la3)))
+multiline_candidate = """INTERMEDIATE REASONING:
+irrelevant
+
+NEXT STEP:
+First line of the proposition.
+Second line of the proposition.
+
+PROOF:
+The proof.
+"""
+checks.append(("missing NEXT STEP is rejected", _extract_informal("only reasoning") is None))
+checks.append(("multiline NEXT STEP is retained",
+               _extract_next_step(_extract_informal(multiline_candidate) or "") ==
+               "First line of the proposition.\nSecond line of the proposition."))
+# §6 layout: step1 candidate1 is empty, candidate2 is exhausted, candidate3 is accepted.
+candidate1_dir = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001")
+la1 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "lean4_attempt_001", "compile.json")
+la3 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "lean4_attempt_003", "compile.json")
+candidate3_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_003", "reasoning_prompt.md")
+checks.append(("empty reasoning candidate skips Lean attempts",
+               os.path.exists(os.path.join(candidate1_dir, "informal_step.md")) and
+               not os.path.exists(os.path.join(candidate1_dir, "lean4_attempt_001"))))
+checks.append(("candidate2 exhausts three Lean attempts", os.path.exists(la1) and os.path.exists(la3)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
     checks.append(("lean4_attempt_001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
-if os.path.exists(candidate2_prompt):
-    prompt = open(candidate2_prompt).read()
+if os.path.exists(candidate3_prompt):
+    prompt = open(candidate3_prompt).read()
     checks.append(("retry prompt includes complete failed NEXT STEP",
                    "Show both of these facts:\nA = 5 and B = 5." in prompt))
     checks.append(("retry prompt excludes failed candidate PROOF",
@@ -62,7 +81,7 @@ if os.path.exists(candidate2_prompt):
     checks.append(("retry prompt asks not to repeat the step",
                    "Do not repeat it unchanged." in prompt))
 else:
-    checks.append(("candidate2 reasoning prompt written", False))
+    checks.append(("candidate3 reasoning prompt written", False))
 checks.append(("accepted/proof_step_001..003 present",
                all(os.path.exists(os.path.join(root, "accepted", f"proof_step_{n:03d}", "body.lean")) for n in (1, 2, 3))))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step
