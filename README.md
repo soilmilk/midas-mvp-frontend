@@ -104,6 +104,9 @@ Every time you reopen the workspace, run the following commands:
 cd path/to/midas-mvp/
 source .venv/bin/activate
 source ~/.midas-mvp.env
+source "$HOME/.elan/env"
+(cd path/to/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
+# ex: (cd ~/mathlib_host && lake env printenv LEAN_PATH) > warm-server/mathlib_leanpath.txt
 ```
 
 Then you can run the following:
