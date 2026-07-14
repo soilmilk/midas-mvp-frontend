@@ -1,15 +1,17 @@
-## Lean 4 core nuances
-- **Truncated `Nat` subtraction.** For `a b : Nat`, `a - b = 0` when `a < b`. If a step relies on
-  signed subtraction, restate with addition (`a = b + c`) or cast to `Int`.
+## No "sorry" statements allowed in NEW DECLARATIONS section
+- All the lemmas in NEW DECLARATIONS have to be proved completely - no "sorry" is allowed.
+- In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
+## Sorry statements are allowed in UPDATED THEOREM BODY
+- The updated theorem body may contain sorry unless this is the final step.
 
-## NEW DECLARATIONS can also have definitions
+## NEW DECLARATIONS can also have definitions:
+- In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
 
 ## Exception where NEW DECLARATIONS is empty
 - There is an exception in which you can leave `NEW DECLARATIONS` empty: if the step only restructures the proof (induction setup, `rcases`/`by_cases`, `intro`/`obtain`, `by_contra`), change only the theorem body. Don't manufacture
   a lemma to wrap a tactic.
 
-Example:
-
+## Example:
 ### Current Lean 4 file
 
 ```lean4
@@ -39,7 +41,7 @@ The base case is n = 0.
 For the induction step, assume the result holds for n and prove it for n + 1.
 ```
 
-### Expected output
+### Expected output for the example
 
 INTERMEDIATE REASONING:
 This step only introduces the induction structure. It does not establish a
@@ -64,4 +66,6 @@ theorem sum_first_n_odds (n : ℕ) :
       sorry
 ```
 
-
+## Lean 4 core nuances
+- **Truncated `Nat` subtraction.** For `a b : Nat`, `a - b = 0` when `a < b`. If a step relies on
+  signed subtraction, restate with addition (`a = b + c`) or cast to `Int`.

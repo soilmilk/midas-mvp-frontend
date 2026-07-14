@@ -73,7 +73,7 @@ class ReasoningAgent:
                 "However, instead of generating the whole solution at once, your task is to "
                 "assess the current progress and suggest the next step.\n"
             ),
-            "\n## Informal problem\n" + informal_problem,
+            "\n## Problem statement:\n" + informal_problem,
             "\n## Current progress (assume everything here has been already proved)\n" + (informal_progress or "(none yet)"),
         #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
@@ -100,11 +100,11 @@ class TranslationAgent:
         self.offline = offline_responses
         self.max_tokens = max_tokens
 
-    def build_prompt(self, header: str, prelude: List[str], context: str,
+    def build_prompt(self, header: str, informal_problem: str, prelude: List[str], context: str,
                      accepted_decls: List[str], current_body: str,
                      informal_candidate: str, compiler_feedback: str = "") -> str:
         current_file = reconstruct(prelude, context, accepted_decls,
-                                   "-- Current theorem body\n" + (current_body or "").strip())
+                                   "" + (current_body or "").strip())
         parts = [
             (
                 "You are part of a system that converts an English mathematical proof into a Lean 4 proof.\n\n"
@@ -129,11 +129,15 @@ class TranslationAgent:
                 "NEW DECLARATIONS:\n"
                 "<New lemmas along with their proofs>\n\n"
                 "UPDATED THEOREM BODY:\n"
-                "<Updated theorem body - only the proof can be changed>\n"
+                "```lean4\n"
+                f"{header}\n"
+                "  <Updated theorem proof, it may use the new lemmas and objects in NEW DECLARATIONS, and can use 'sorry' statements>\n"
+                "```"
             ),
-            "\n## Current Lean 4 file\n```lean4\n" + current_file + "```",
+            "\n## Problem statement in English:\n" + informal_problem,
+            "\n\n## Current Lean 4 file\n```lean4\n" + current_file + "```",
             (
-                "\nThe line `-- Current theorem body` marks the theorem body."
+                "\nThe last theorem is the current theorem body. "
                 "Your new lemmas and/or definitions in NEW DECLARATIONS will be added " 
                 "before that theorem body. Do not repeat imports, "
                 "context definitions, or already accepted declarations in NEW DECLARATIONS."
@@ -142,15 +146,7 @@ class TranslationAgent:
         ]
         if compiler_feedback:
             parts.append("\n## Compiler feedback from the previous attempt (fix this)\n" + compiler_feedback)
-        parts.append(
-            "\nOutput intermediate reasoning if you like, then EXACTLY these two required sections:\n\n"
-            "NEW DECLARATIONS:\n```lean4\n-- descriptive comment\n<new lemmas/defs, or leave empty>\n```\n\n"
-            "UPDATED THEOREM BODY:\n\n```\n<full theorem declaration, header copied exactly, only the "
-            "proof after ':= by' changed>\n```\n\n"
-            "Rules: NEW DECLARATIONS is a delta (may be empty), no sorry, no imports, don't repeat "
-            "accepted declarations. UPDATED THEOREM BODY is the complete theorem, header byte-exact "
-            f"(`{header}`), "
-            "may contain sorry unless this is the final step.")
+
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 

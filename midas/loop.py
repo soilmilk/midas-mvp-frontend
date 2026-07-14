@@ -204,7 +204,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     return finish()
 
                 try:
-                    t = translation.translate(header, prelude, prob.context, accepted_decls,
+                    t = translation.translate(header, prob.informal_problem, prelude, prob.context, accepted_decls,
                                               latest_body, informal_candidate,
                                               compiler_feedback=compiler_feedback, attempt_index=k - 1,
                                               timeout=call_timeout())
