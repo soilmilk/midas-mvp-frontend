@@ -66,7 +66,7 @@ class ReasoningAgent:
 
     def build_prompt(self, informal_problem: str, informal_progress: str, knowledge: List[str],
                      context_summary: str, accepted_decls_summary: str, current_body: str,
-                     failure_feedback: str = "") -> str:
+                     failure_feedback: str = "", failed_next_step: str = "") -> str:
         parts = [
             (
                 "You are solving a hard math problem.\n\n"
@@ -77,6 +77,9 @@ class ReasoningAgent:
             "\n## Current progress (assume everything here has been already proved)\n" + (informal_progress or "(none yet)"),
         #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
+        if failed_next_step:
+            parts.append("\n## Previous step that could not be translated to Lean\n\n" +
+                         failed_next_step)
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
         parts.append("\n## Considerations\n" + self.considerations)

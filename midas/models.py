@@ -17,7 +17,7 @@ class Config(BaseModel):
     lean_prelude: List[str] = Field(default_factory=list)   # full Lean lines, not module names
     # not in the spec's example but referenced by §9/§10 — OpenRouter model slugs, overridable
     reasoning_model: str = "openai/gpt-5"
-    translation_model: str = "anthropic/claude-sonnet-5"
+    translation_model: str = "openai/gpt-5"
     # gpt-5 is a reasoning model; latency = reasoning tokens. minimal(~1.5s) < low(~6s) < medium/high.
     reasoning_effort: str = "low"
     # "fresh" = fresh `lean` per checkpoint (default). "warm" = in-repo warm server

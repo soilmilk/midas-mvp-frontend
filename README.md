@@ -4,7 +4,8 @@ A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an inform
 Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small proof step) and a
 **translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
 is proved with no `sorry`, or a budget is exhausted. Every step is checked by the Lean compiler
-in accumulated context. 
+in accumulated context. If every Lean translation of an informal candidate fails, its exact `NEXT STEP`
+is shown to the reasoner so the next candidate can simplify or reformulate it.
 
 > **Training / modifying it:** the intended way to improve behavior is to improve the two prompt files
 > in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for

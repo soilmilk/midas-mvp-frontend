@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Offline end-to-end loop test (no API). Canned reasoning + translation queues drive
-run_problem() through the full §18 control flow, INCLUDING a deliberate first-attempt
-translation failure (bad output) to exercise the retry path, then to final_success.
+run_problem() through the full §18 control flow, INCLUDING a candidate whose every
+translation fails, to exercise failed-step feedback, then to final_success.
 Verifies the §6 artifact tree, state.json, and status transitions.
 """
 import os, sys, shutil, json
@@ -19,14 +19,17 @@ def T(decls, body):
     return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\nUPDATED THEOREM BODY:\n\n```\n{body}\n```\n"
 
 reasoning = [
+    "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.",
     "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.",
     "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.",
     "NEXT STEP:\nCombine to finish.\n\nPROOF:\nRewrite with A=5 and B=5.",
 ]
 translation = [
-    "here is my answer without the required sections",                              # step1 attempt1: format_failed
+    "unparseable attempt one",                                                       # candidate1: exhausted
+    "unparseable attempt two",
+    "unparseable attempt three",
     T("-- A evaluates to 5.\ntheorem A_eq : A = 5 := by decide",
-      "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  sorry"),         # step1 attempt2: accepted OPEN
+      "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  sorry"),         # candidate2: accepted OPEN
     T("-- B evaluates to 5.\ntheorem B_eq : B = 5 := by decide",
       "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  have hB : B = 5 := B_eq\n  sorry"),  # step2: OPEN
     T("-- Combine.\ntheorem key : f A = f B := by rw [A_eq, B_eq]",
@@ -42,13 +45,24 @@ checks.append(("final status == final_success", state.status == "final_success")
 checks.append(("accepted proof steps == 3", state.stats.accepted_proof_steps == 3))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
 checks.append(("final/solution.lean written", os.path.exists(os.path.join(root, "final", "solution.lean"))))
-# §6 layout: step1 has lean4_attempt_001 (format_failed) and lean4_attempt_002 (accepted)
+# §6 layout: step1 candidate1 is exhausted and candidate2 is accepted.
 la1 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_001", "compile.json")
-la2 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_002", "compile.json")
-checks.append(("proof_step_001 has lean4_attempt_001 + lean4_attempt_002", os.path.exists(la1) and os.path.exists(la2)))
+la3 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001", "lean4_attempt_003", "compile.json")
+candidate2_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "reasoning_prompt.md")
+checks.append(("candidate1 exhausts three Lean attempts", os.path.exists(la1) and os.path.exists(la3)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
     checks.append(("lean4_attempt_001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
+if os.path.exists(candidate2_prompt):
+    prompt = open(candidate2_prompt).read()
+    checks.append(("retry prompt includes complete failed NEXT STEP",
+                   "Show both of these facts:\nA = 5 and B = 5." in prompt))
+    checks.append(("retry prompt excludes failed candidate PROOF",
+                   "Evaluate both expressions." not in prompt))
+    checks.append(("retry prompt asks not to repeat the step",
+                   "Do not repeat it unchanged." in prompt))
+else:
+    checks.append(("candidate2 reasoning prompt written", False))
 checks.append(("accepted/proof_step_001..003 present",
                all(os.path.exists(os.path.join(root, "accepted", f"proof_step_{n:03d}", "body.lean")) for n in (1, 2, 3))))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step

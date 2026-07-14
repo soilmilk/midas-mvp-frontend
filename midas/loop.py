@@ -28,6 +28,12 @@ def _extract_informal(text: str) -> str:
     return m.group(0).strip() if m else text.strip()
 
 
+def _extract_next_step(informal: str) -> str:
+    """Return the complete proposition, excluding its proof, for reasoning retries."""
+    m = re.search(r"(?is)NEXT STEP:\s*(.+?)(?:\n\s*PROOF:|\Z)", informal)
+    return m.group(1).strip() if m else ""
+
+
 def _feedback_from_errors(errs: List[Diagnostic]) -> str:
     return "\n".join(f"{e.file}:{e.line}:{e.col}: {e.severity}"
                      f"{'('+e.code+')' if e.code else ''}: {e.message}" for e in errs) or "(no detail)"
@@ -169,6 +175,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         state.proof_steps.append(ps)
         step_accepted = False
         reasoning_feedback = ""
+        failed_next_step = ""
 
         for j in range(1, prob.config.max_informal_candidates_per_proof_step + 1):
             ic = InformalCandidate(informal_candidate_index=j)
@@ -180,13 +187,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             try:
                 r = reasoning.propose(prob.informal_problem, informal_progress, state.current_knowledge,
                                       prob.context, _accepted_summary(accepted_decls), latest_body,
-                                      failure_feedback=reasoning_feedback, attempt_index=j - 1,
+                                      failure_feedback=reasoning_feedback,
+                                      failed_next_step=failed_next_step, attempt_index=j - 1,
                                       timeout=call_timeout())
             except Exception as e:                          # timeout / API error — don't crash
                 state.stats.total_llm_calls += 1
                 last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
                 bump("reasoning_call_failed"); ic.status = "abandoned"
                 reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
+                failed_next_step = ""
                 statemgr.save(state); continue
             state.stats.total_llm_calls += 1
             informal_candidate = _extract_informal(r.text)
@@ -298,8 +307,14 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             if candidate_accepted:
                 break
             ic.status = "abandoned"
-            reasoning_feedback = ("The previous informal candidate could not be translated to Lean "
-                                  "after 3 attempts. Suggest a simpler or more direct step.")
+            failed_next_step = _extract_next_step(informal_candidate)
+            reasoning_feedback = (
+                "The step above could not be translated after all Lean attempts. Propose a smaller, "
+                "more direct, or differently formulated step. Do not repeat it unchanged."
+                if failed_next_step else
+                "The previous informal candidate could not be translated to Lean. Suggest a simpler "
+                "or more direct step."
+            )
             statemgr.save(state)
 
         if state.status == "final_success":

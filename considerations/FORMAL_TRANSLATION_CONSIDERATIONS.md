@@ -1,8 +1,11 @@
 ## No "sorry" statements allowed in NEW DECLARATIONS section
 - All the lemmas in NEW DECLARATIONS have to be proved completely - no "sorry" is allowed.
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
+
 ## Sorry statements are allowed in UPDATED THEOREM BODY
 - The updated theorem body may contain sorry unless this is the final step.
+
+## Prefer using the new lemmas in the theorem body instead of leaving them unused.
 
 ## NEW DECLARATIONS can also have definitions:
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
