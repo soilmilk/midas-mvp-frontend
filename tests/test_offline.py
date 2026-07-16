@@ -15,7 +15,10 @@ from midas.structure import (extract_header, check_structure, body_contains_sorr
                              HeaderError, declared_names)
 from midas.verifier_client import VerifierClient, build_compile_json
 from midas.reconstructor import reconstruct
-from midas.models import CheckReport
+from midas.models import CheckReport, Diagnostic
+from midas.agents import TranslationAgent, TranslationRepairContext
+from midas.loop import _submitted_source, _render_repair_diagnostics
+from midas.warm_backend import _warm_diags
 
 def _names(decl_list):
     out = []
@@ -145,6 +148,51 @@ for label, raw in [
 ]:
     parsed = parse_translator_output(raw)
     row(label, not parsed.ok, parsed.error)
+
+# ---- translator repair context: full output + every located diagnostic ----
+repair_decls = "theorem broken : A = 5 := by\n  exact missing_one"
+repair_body = "theorem main : f A = f B := by\n  exact missing_two"
+submitted = _submitted_source(PRELUDE, context, [], repair_decls, repair_body, warm=False)
+decl_line = submitted[:submitted.index("missing_one")].count("\n") + 1
+body_line = submitted[:submitted.index("missing_two")].count("\n") + 1
+repair_errors = [
+    Diagnostic(file="check.lean", line=decl_line, col=8, code="lean.unknownIdentifier",
+               message="Unknown identifier missing_one"),
+    Diagnostic(file="check.lean", line=body_line, col=8,
+               message="Unknown identifier missing_two"),
+]
+located = _render_repair_diagnostics(repair_errors, submitted, repair_decls, repair_body)
+previous_raw = ("INTERMEDIATE REASONING:\nold reasoning\n\nNEW DECLARATIONS:\n```lean4\n"
+                + repair_decls + "\n```\n\nUPDATED THEOREM BODY:\n```lean4\n"
+                + repair_body + "\n```")
+repair = TranslationRepairContext("body_check", previous_raw, repair_decls, repair_body, located)
+agent = TranslationAgent("offline", "test considerations", offline_responses=[])
+repair_prompt = agent.build_prompt(header, "problem", PRELUDE, context, [], body_initial,
+                                   "NEXT STEP: repair", repair_context=repair)
+row("repair prompt contains complete raw output", previous_raw in repair_prompt, "raw prior response")
+row("repair prompt does not duplicate parsed declarations",
+    "### Parsed NEW DECLARATIONS" not in repair_prompt and repair_prompt.count(repair_decls) == 1,
+    "declaration appears only in raw output")
+row("repair prompt does not duplicate parsed body",
+    "### Parsed UPDATED THEOREM BODY" not in repair_prompt and repair_prompt.count(repair_body) == 1,
+    "body appears only in raw output")
+row("repair prompt contains every diagnostic",
+    "Error 1" in repair_prompt and "Error 2" in repair_prompt and
+    "missing_one" in repair_prompt and "missing_two" in repair_prompt, "two errors")
+row("repair prompt maps declaration location",
+    "Source region: **rejected NEW DECLARATIONS**" in repair_prompt, "declaration region")
+row("repair prompt maps body location",
+    "Source region: **rejected UPDATED THEOREM BODY**" in repair_prompt, "body region")
+row("repair prompt requires complete replacement",
+    "do not return a diff or patch" in repair_prompt, "repair contract")
+
+warm_errors = _warm_diags(
+    "REJECT :: <req>:20:10: error: first failure\ncontinued detail\n"
+    "<req>:24:2: error(lean.test): second failure")
+row("warm parser preserves all diagnostics", len(warm_errors) == 2, repr(warm_errors))
+row("warm parser preserves multiline detail",
+    warm_errors[0]["message"] == "first failure\ncontinued detail", warm_errors[0]["message"])
+row("warm parser preserves diagnostic code", warm_errors[1]["code"] == "lean.test", warm_errors[1]["code"])
 
 # ---- run the toy through the deterministic spine ----
 accepted_decls = []

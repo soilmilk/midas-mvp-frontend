@@ -25,7 +25,7 @@ def loadEnv (input : String) : IO Command.State := unsafe do
 def hasError (msgs : List Message) : Bool := msgs.any (·.severity == MessageSeverity.error)
 def allText (msgs : List Message) : IO String := do
   let mut s := ""
-  for m in msgs do s := s ++ (← m.toString)
+  for m in msgs do s := s ++ (← m.toString) ++ "\n"
   return s
 def contains (hay needle : String) : Bool := (hay.splitOn needle).length > 1
 def isStd (n : String) : Bool := n == "propext" || n == "Classical.choice" || n == "Quot.sound"
@@ -53,7 +53,7 @@ def allNames (input : String) : List String :=
   let toks := ((input.splitOn " ").flatMap (·.splitOn "\n")).flatMap (·.splitOn "\t") |>.filter (· ≠ "")
   collectNames toks []
 
-def oneLine (s : String) : String := ((s.replace "\n" " ").take 90).toString
+def wireText (s : String) : String := s.replace "\n" "␤"
 
 def leadWs (s : String) : String := (s.takeWhile fun c => c == ' ' || c == '\t').toString
 
@@ -84,7 +84,7 @@ unsafe def verify (base : Command.State) (src0 : String) : IO (String × Bool ×
   let (st, msgs) ← runNew base src
   let txt ← allText msgs
   if hasError msgs then
-    return (s!"REJECT  (compile error)   :: {oneLine txt}", false, st)
+    return (s!"REJECT  (compile error)   :: {wireText txt}", false, st)
   let names := allNames src
   if names.isEmpty then
     if contains txt "sorry" then
@@ -96,7 +96,7 @@ unsafe def verify (base : Command.State) (src0 : String) : IO (String × Bool ×
   for nm in names do
     let (_, axmsgs) ← runNew st s!"#print axioms {nm}"
     if hasError axmsgs then                      -- FIX 1: never swallow a probe error
-      return (s!"REJECT  (axiom probe failed for '{nm}')   :: {oneLine (← allText axmsgs)}", false, st)
+      return (s!"REJECT  (axiom probe failed for '{nm}')   :: {wireText (← allText axmsgs)}", false, st)
     let av := axiomVerdict (← allText axmsgs)
     if av == "sorry" then sorried := sorried ++ [nm]
     else if contains av "nonstd:" then flagged := flagged ++ [s!"{nm} → {av}"]

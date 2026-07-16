@@ -40,6 +40,16 @@ class LLMResult:
     completion_tokens: int = 0
 
 
+@dataclass
+class TranslationRepairContext:
+    """The immediately preceding rejected translation, supplied to a retry."""
+    failed_check: str
+    raw_output: str
+    declarations: str
+    body: str
+    diagnostics: str
+
+
 def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None,
           timeout: float = None) -> LLMResult:
     kw = dict(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=max_tokens)
@@ -105,7 +115,8 @@ class TranslationAgent:
 
     def build_prompt(self, header: str, informal_problem: str, prelude: List[str], context: str,
                      accepted_decls: List[str], current_body: str,
-                     informal_candidate: str, compiler_feedback: str = "") -> str:
+                     informal_candidate: str, compiler_feedback: str = "",
+                     repair_context: Optional[TranslationRepairContext] = None) -> str:
         current_file = reconstruct(prelude, context, accepted_decls,
                                    "" + (current_body or "").strip())
         parts = [
@@ -147,7 +158,23 @@ class TranslationAgent:
             ),
             "\n## English step to translate (with its proof)\n" + informal_candidate,
         ]
-        if compiler_feedback:
+        if repair_context is not None:
+            parts.append(
+                "\n## Previous rejected translation — repair this exact output\n\n"
+                f"The `{repair_context.failed_check}` check failed. The complete previous "
+                "translator response is reproduced below.\n\n"
+                "### Complete previous model output\n\n"
+                "<previous_model_output>\n" + repair_context.raw_output.rstrip() + "\n</previous_model_output>\n\n"
+                "### All compiler errors and their source locations\n\n"
+                + repair_context.diagnostics.rstrip() + "\n\n"
+                "### Required repair behavior\n\n"
+                "Fix every compiler error listed above. Use the reported source region and "
+                "numbered excerpt to repair the exact failing expression. Preserve unrelated "
+                "working code and the intended English step. Return the complete NEW "
+                "DECLARATIONS and complete UPDATED THEOREM BODY again; do not return a diff or "
+                "patch. Keep the original theorem header byte-for-byte unchanged."
+            )
+        elif compiler_feedback:
             parts.append("\n## Compiler feedback from the previous attempt (fix this)\n" + compiler_feedback)
 
         parts.append("\n## Considerations\n" + self.considerations)
