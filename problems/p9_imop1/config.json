@@ -1,0 +1,17 @@
+{
+  "max_proof_steps": 20,
+  "max_informal_candidates_per_proof_step": 3,
+  "max_lean_translation_attempts_per_candidate": 3,
+  "max_total_lean_attempts": 80,
+  "max_runtime_seconds": 2000,
+  "lean_prelude": [
+    "import Mathlib",
+    "import Aesop",
+    "set_option maxHeartbeats 0",
+    "open BigOperators Real Nat Topology Rat"
+  ],
+  "reasoning_model": "openai/gpt-5",
+  "translation_model": "anthropic/claude-sonnet-5",
+  "reasoning_effort": "high",
+  "verifier_backend": "warm"
+}
