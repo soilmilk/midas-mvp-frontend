@@ -1,7 +1,7 @@
 ## Output structure
 
 - Suggest ONE proof step along with its proof.
-- Avoid large jumps, as this step will be translated to Lean 4 by another component.
+- Avoid large jumps, as this step will be translated to Lean 4 by another component. Output simple ideas that can be translated to compilable Lean 4.
 
 - Do not propose a complete proof unless the theorem is clearly almost finished.
 - Output should have an intermediate reasoning part, a NEXT STEP part, and a PROOF part.
