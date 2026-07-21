@@ -9,7 +9,7 @@ from typing import List, Optional
 from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
                      RunStats, CompileJson, CheckReport, Diagnostic)
 from .problem import load_problem, InputValidator, Problem
-from .agents import ReasoningAgent, TranslationAgent
+from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
 from .parser import parse_translator_output
 from .structure import (extract_header, check_structure, body_contains_sorry, declared_names)
 from .verifier_client import VerifierClient, make_verifier, build_compile_json
@@ -47,6 +47,78 @@ def _accepted_summary(decls: List[str]) -> str:
     if not decls:
         return "(none)"
     return "\n\n".join(decls)
+
+
+def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
+                      declarations: str, body: str, warm: bool) -> str:
+    """Reproduce the source layout used by the selected verifier for location mapping."""
+    if warm:
+        pre = [line for line in (prelude or []) if not line.strip().startswith("import ")]
+        blocks = [context] + list(accepted_decls)
+        if declarations.strip():
+            blocks.append(declarations)
+        source = "\n".join(pre + ["\n\n".join(blocks)])
+        if body.strip():
+            source += "\n\n" + body
+        return source
+
+    parts = list(prelude or [])
+    if prelude:
+        parts.append("")
+    for block in [context] + list(accepted_decls) + ([declarations] if declarations.strip() else []):
+        if block and block.strip():
+            parts.extend([block.rstrip(), ""])
+    if body and body.strip():
+        parts.append(body.rstrip())
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def _line_range(source: str, fragment: str, start_at: int = 0) -> tuple[int, int]:
+    if not fragment.strip():
+        return (0, -1)
+    pos = source.find(fragment.rstrip(), start_at)
+    if pos < 0:
+        return (0, -1)
+    first = source.count("\n", 0, pos) + 1
+    return first, first + fragment.rstrip().count("\n")
+
+
+def _render_repair_diagnostics(errors: List[Diagnostic], source: str, declarations: str,
+                               body: str) -> str:
+    """Render every diagnostic with its owning region and a numbered nearby excerpt."""
+    decl_range = _line_range(source, declarations)
+    body_range = _line_range(source, body, source.find(declarations.rstrip()) + len(declarations.rstrip())
+                             if declarations.strip() else 0)
+    lines = source.splitlines()
+    rendered = []
+    for index, error in enumerate(errors, 1):
+        line, col = error.line, error.col
+        if line <= 0:
+            embedded = re.search(r"<req>:(\d+):(\d+):", error.message)
+            if embedded:
+                line, col = int(embedded.group(1)), int(embedded.group(2))
+        if decl_range[0] <= line <= decl_range[1]:
+            region = "rejected NEW DECLARATIONS"
+        elif body_range[0] <= line <= body_range[1]:
+            region = "rejected UPDATED THEOREM BODY"
+        else:
+            region = "prelude, context, or previously accepted code"
+        code = f" ({error.code})" if error.code else ""
+        item = [f"#### Error {index}",
+                f"- Diagnostic: `{error.file}:{line}:{col}` {error.severity}{code}",
+                f"- Source region: **{region}**",
+                f"- Message: {error.message}"]
+        if line > 0 and lines:
+            lo, hi = max(1, line - 3), min(len(lines), line + 3)
+            width = len(str(hi))
+            excerpt = [f"{n:>{width}} | {lines[n - 1]}" for n in range(lo, hi + 1)]
+            if line <= len(lines):
+                excerpt.append(" " * width + " | " + " " * max(0, col) + "^")
+            item.extend(["- Nearby submitted Lean code:", "```lean4", *excerpt, "```"])
+        else:
+            item.append("- Nearby submitted Lean code: unavailable because the verifier supplied no line number.")
+        rendered.append("\n".join(item))
+    return "\n\n".join(rendered) if rendered else "No structured diagnostics were returned."
 
 
 class LimitController:
@@ -233,6 +305,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
             candidate_accepted = False
             compiler_feedback = ""
+            repair_context = None
             for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
                 lim = limits.exceeded(state)
                 if lim:
@@ -243,7 +316,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 try:
                     t = translation.translate(header, prob.informal_problem, prelude, prob.context, accepted_decls,
                                               latest_body, informal_candidate,
-                                              compiler_feedback=compiler_feedback, attempt_index=k - 1,
+                                              compiler_feedback=compiler_feedback, repair_context=repair_context, attempt_index=k - 1,
                                               timeout=call_timeout())
                 except Exception as e:                      # timeout / API error — don't crash
                     state.stats.total_llm_calls += 1
@@ -265,6 +338,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     _log_attempt(logger, la, paths, i, j, k, t, None, None, cj)
                     la.status = "parse_error"; bump("parse_error")
                     compiler_feedback = f"Your output was not parseable: {pr.error}. Emit the two required sections."
+                    repair_context = None
                     statemgr.save(state); continue
 
                 prev_names = _names(accepted_decls)
@@ -275,6 +349,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.status = "format_failed"
                     bump("changed_theorem_statement" if any("header" in v for v in sr.violations) else "bad_output_format")
                     compiler_feedback = "Structure check failed: " + "; ".join(sr.violations)
+                    repair_context = None
                     statemgr.save(state); continue
 
                 # ---- declaration check then body check (§14) ----
@@ -286,6 +361,14 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.status = "lemma_failed"; bump("new_declaration_does_not_compile")
                     last_error = cp.declaration_raw
                     compiler_feedback = "Declaration failed to compile:\n" + _feedback_from_errors(cj.declaration_check.errors)
+                    submitted = _submitted_source(prelude, prob.context, accepted_decls,
+                                                  pr.declarations, pr.body,
+                                                  prob.config.verifier_backend == "warm")
+                    repair_context = TranslationRepairContext(
+                        failed_check="declaration_check", raw_output=t.text,
+                        declarations=pr.declarations, body=pr.body,
+                        diagnostics=_render_repair_diagnostics(
+                            cj.declaration_check.errors, submitted, pr.declarations, pr.body))
                     statemgr.save(state); continue
 
                 state.stats.total_lean_compiles += 1
@@ -295,6 +378,14 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.status = "body_failed"; bump("body_does_not_compile")
                     last_error = cp.body_raw
                     compiler_feedback = "Body failed to compile:\n" + _feedback_from_errors(cj.body_check.errors)
+                    submitted = _submitted_source(prelude, prob.context, accepted_decls,
+                                                  pr.declarations, pr.body,
+                                                  prob.config.verifier_backend == "warm")
+                    repair_context = TranslationRepairContext(
+                        failed_check="body_check", raw_output=t.text,
+                        declarations=pr.declarations, body=pr.body,
+                        diagnostics=_render_repair_diagnostics(
+                            cj.body_check.errors, submitted, pr.declarations, pr.body))
                     statemgr.save(state); continue
 
                 # ---- both checks passed ----

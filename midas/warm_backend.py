@@ -31,8 +31,32 @@ _DEFAULT_WARM_BINARY = _REPO_ROOT / "warm-server" / ".lake" / "build" / "bin" / 
 _DEFAULT_LEAN_PATH_FILE = _REPO_ROOT / "warm-server" / "mathlib_leanpath.txt"
 
 
-def _diag(msg: str):
-    return asdict(Diag("<warm>", 0, 0, "error", "", msg.strip()[:300]))
+_WARM_DIAG = re.compile(
+    r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+): "
+    r"(?P<sev>error|warning)(?:\((?P<code>[^)]*)\))?: (?P<msg>.*)$")
+
+
+def _decode_wire(msg: str) -> str:
+    return msg.replace("␤", "\n")
+
+
+def _warm_diags(msg: str):
+    """Parse every Lean diagnostic carried by a warm-server verdict."""
+    text = _decode_wire(msg)
+    payload = text.split("::", 1)[1].strip() if "::" in text else text.strip()
+    diagnostics, current = [], None
+    for line in payload.splitlines():
+        match = _WARM_DIAG.match(line)
+        if match:
+            if current is not None:
+                diagnostics.append(asdict(current))
+            current = Diag(match["file"], int(match["line"]), int(match["col"]),
+                           match["sev"], match["code"] or "", match["msg"])
+        elif current is not None:
+            current.message += "\n" + line
+    if current is not None:
+        diagnostics.append(asdict(current))
+    return diagnostics or [asdict(Diag("<warm>", 0, 0, "error", "", payload))]
 
 
 class WarmTxnBackend:
@@ -79,7 +103,7 @@ class WarmTxnBackend:
                 raise RuntimeError("warm process ended mid-request")
             m = _NODE.match(line)
             if m:
-                return m.group(1).strip()
+                return _decode_wire(m.group(1).strip())
 
     @staticmethod
     def _strip_imports(prelude):
@@ -95,21 +119,22 @@ class WarmTxnBackend:
         v1 = self._submit(decl_block)
         if not v1.startswith("ACCEPT"):
             wall = (time.perf_counter() - t0) * 1000
-            return CheckpointResult(CheckResult("failed", [_diag(v1)]), CheckResult("not_run"),
+            return CheckpointResult(CheckResult("failed", _warm_diags(v1)), CheckResult("not_run"),
                                     None, 0.0, 0.0, wall, v1, "")
 
         body_block = decl_block + "\n\n" + (candidate_body or "")
         v2 = self._submit(body_block)
         body_ok = v2.startswith("ACCEPT") or v2.startswith("OPEN")
         contains_sorry = v2.startswith("OPEN")
-        body_check = CheckResult("passed" if body_ok else "failed", [] if body_ok else [_diag(v2)])
+        body_check = CheckResult("passed" if body_ok else "failed", [] if body_ok else _warm_diags(v2))
         wall = (time.perf_counter() - t0) * 1000
         return CheckpointResult(CheckResult("passed"), body_check, contains_sorry, 0.0, 0.0, wall, v1, v2)
 
     def compile_full_file(self, path: str) -> CompileResult:
         v = self._submit(open(path).read())
         ok = v.startswith("ACCEPT")
-        return CompileResult(ok, 0 if ok else 1, [] if ok else [Diag("<warm>", 0, 0, "error", "", v[:300])],
+        return CompileResult(ok, 0 if ok else 1,
+                             [] if ok else [Diag(**d) for d in _warm_diags(v)],
                              v.startswith("OPEN"), v, 0.0)
 
     def close(self):

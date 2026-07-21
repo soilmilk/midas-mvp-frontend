@@ -26,7 +26,8 @@ reasoning = [
     "NEXT STEP:\nCombine to finish.\n\nPROOF:\nRewrite with A=5 and B=5.",
 ]
 translation = [
-    "unparseable attempt one",                                                       # candidate1: exhausted
+    T("theorem broken : A = 5 := by exact missing_identifier",
+      "theorem main : f A = f B := by\n  sorry"),                         # compiler failure, then retry
     "unparseable attempt two",
     "unparseable attempt three",
     T("-- A evaluates to 5.\ntheorem A_eq : A = 5 := by decide",
@@ -64,6 +65,9 @@ checks.append(("multiline NEXT STEP is retained",
 candidate1_dir = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001")
 la1 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "lean4_attempt_001", "compile.json")
 la3 = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_002", "lean4_attempt_003", "compile.json")
+retry_translation_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001",
+                                        "informal_candidate_002", "lean4_attempt_002",
+                                        "translator_prompt.md")
 candidate3_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_003", "reasoning_prompt.md")
 checks.append(("empty reasoning candidate skips Lean attempts",
                os.path.exists(os.path.join(candidate1_dir, "informal_step.md")) and
@@ -71,7 +75,19 @@ checks.append(("empty reasoning candidate skips Lean attempts",
 checks.append(("candidate2 exhausts three Lean attempts", os.path.exists(la1) and os.path.exists(la3)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
-    checks.append(("lean4_attempt_001 attempt_status == parse_error", cj["attempt_status"] == "parse_error"))
+    checks.append(("lean4_attempt_001 attempt_status == lemma_failed", cj["attempt_status"] == "lemma_failed"))
+if os.path.exists(retry_translation_prompt):
+    retry_prompt = open(retry_translation_prompt).read()
+    checks.append(("translator retry includes rejected declaration",
+                   "theorem broken : A = 5 := by exact missing_identifier" in retry_prompt))
+    checks.append(("translator retry includes complete rejected body",
+                   "theorem main : f A = f B := by\n  sorry" in retry_prompt))
+    checks.append(("translator retry includes located compiler error",
+                   "Unknown identifier `missing_identifier`" in retry_prompt and
+                   "Source region: **rejected NEW DECLARATIONS**" in retry_prompt and
+                   "Nearby submitted Lean code" in retry_prompt))
+else:
+    checks.append(("translator retry prompt written", False))
 if os.path.exists(candidate3_prompt):
     prompt = open(candidate3_prompt).read()
     checks.append(("retry prompt includes complete failed NEXT STEP",
