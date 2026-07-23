@@ -185,6 +185,10 @@ row("repair prompt maps body location",
     "Source region: **rejected UPDATED THEOREM BODY**" in repair_prompt, "body region")
 row("repair prompt requires complete replacement",
     "do not return a diff or patch" in repair_prompt, "repair contract")
+row("translator prompt requires an explicit plan",
+    "PLAN:" in repair_prompt and
+    "which lemmas or definitions you will propose" in repair_prompt and
+    "how you will change the theorem body" in repair_prompt, "planning contract")
 
 warm_errors = _warm_diags(
     "REJECT :: <req>:20:10: error: first failure\ncontinued detail\n"
