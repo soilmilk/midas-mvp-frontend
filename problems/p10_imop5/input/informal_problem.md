@@ -1,6 +1,6 @@
 The following problem statement is written in tex:
 
-Prove that there exists a function
+Determine all functions
 
 \[
 f : \mathbb{R} \to \mathbb{R}
@@ -16,4 +16,3 @@ such that \(f(x) > 0\) for every positive real number \(x\), and such that, for 
 \sqrt{x f(y)}.
 \]
 
-Find the collection of all such functions.
