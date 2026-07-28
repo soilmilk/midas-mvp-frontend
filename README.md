@@ -301,3 +301,12 @@ tests/                      offline pipeline + offline loop tests (no API key)
   the `fresh` backend, a Mathlib checkpoint takes tens of seconds each.
 - The **Metaoptimizer agent itself** (SPEC §20) is out of MVP scope — the loop logs everything it
   would consume; `HANDOFF.md` describes building it.
+
+
+## Hard Mode temporary notes
+
+The Hard Mode Phase 0 baseline was recorded on 2026-07-28 with all three
+commands passing unchanged. Core-only development fixtures are documented in
+[`tests/fixtures/hard_mode/`](tests/fixtures/hard_mode/README.md). These are
+fixture snippets only; production Hard Mode behavior is introduced in later
+phases.
