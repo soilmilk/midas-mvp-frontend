@@ -161,6 +161,11 @@ check("non-final closed theorem body is not structurally required open",
 
 
 # Deterministic warm-wire contract without requiring a Mathlib process.
+empty_warm = object.__new__(WarmTxnBackend)
+check("warm empty source is accepted without server I/O",
+      empty_warm._submit("\n").startswith("ACCEPT"))
+
+
 class FakeWarm(WarmTxnBackend):
     def __init__(self, responses):
         self.responses = list(responses)

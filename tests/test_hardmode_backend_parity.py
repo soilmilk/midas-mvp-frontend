@@ -39,6 +39,8 @@ INVALID_FILLED = read("invalid_filled_placeholder.lean")
 FINAL_BODY = read("valid_final_theorem.lean")
 INVALID_FINAL_BODY = read("invalid_final_theorem.lean")
 FINAL_DECL = read("optional_final_declaration.lean")
+EMPTY_CONTEXT_PLACEHOLDER = "def answer : Nat := by\n  sorry\n"
+EMPTY_CONTEXT_BODY = "theorem main : answer = 5 := by\n  sorry\n"
 
 
 @dataclass(frozen=True)
@@ -172,6 +174,33 @@ except RuntimeError as error:
     raise
 
 try:
+    empty_fresh = fresh.check(
+        [],
+        "",
+        [],
+        "",
+        EMPTY_CONTEXT_BODY,
+        placeholder=EMPTY_CONTEXT_PLACEHOLDER,
+    )
+    empty_warm = warm.check(
+        [],
+        "",
+        [],
+        "",
+        EMPTY_CONTEXT_BODY,
+        placeholder=EMPTY_CONTEXT_PLACEHOLDER,
+    )
+    check(
+        "empty context: expected verdict",
+        verdict(empty_fresh) == ("passed", "passed", True, True),
+        f"fresh={verdict(empty_fresh)!r}",
+    )
+    check(
+        "empty context: fresh/warm verdict parity",
+        verdict(empty_warm) == verdict(empty_fresh),
+        f"fresh={verdict(empty_fresh)!r} warm={verdict(empty_warm)!r}",
+    )
+
     for case in CASES:
         fresh_result = fresh.check(
             [],

@@ -95,7 +95,14 @@ class WarmTxnBackend:
     def _submit(self, block: str) -> str:
         """Send one %%-delimited block; return the verdict text from the next `[node …]` line.
         Scanning to the next `[node …]` line naturally skips any trailing goal lines from a prior
-        OPEN verdict — hence the sentinel-hardening recommendation in the header."""
+        OPEN verdict — hence the sentinel-hardening recommendation in the header.
+
+        The warm server intentionally emits no node for an empty request. Treat an
+        empty Lean source as a successful no-op locally so callers never wait for a
+        response that cannot arrive.
+        """
+        if not block.strip():
+            return "ACCEPT  (empty source)"
         self.proc.stdin.write(block.rstrip() + "\n%%\n")
         self.proc.stdin.flush()
         while True:
