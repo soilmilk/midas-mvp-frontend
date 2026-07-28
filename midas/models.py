@@ -3,12 +3,13 @@ Pydantic v2 models matching SPEC.md §2 (config), §5 (state hierarchy), §17 (s
 and §19 (compile.json). Python 3.9-safe (Optional, from __future__ annotations).
 """
 from __future__ import annotations
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
 # ---------------- config (§2) ----------------
 class Config(BaseModel):
+    problem_mode: Literal["easy", "hard"] = "easy"
     max_proof_steps: int = 40
     max_informal_candidates_per_proof_step: int = 3
     max_lean_translation_attempts_per_candidate: int = 3

@@ -28,7 +28,8 @@ from .structure import StructureResult  # noqa: E402
 class VerifierBackend:
     """Interface both backends implement."""
     def check(self, prelude: List[str], context: str, accepted_declarations: List[str],
-              candidate_declaration: str, candidate_body: str) -> CheckpointResult:
+              candidate_declaration: str, candidate_body: str, *,
+              placeholder: str = "", require_closed: bool = False) -> CheckpointResult:
         raise NotImplementedError
 
     def compile_full_file(self, path: str) -> CompileResult:
@@ -40,9 +41,11 @@ class VerifierBackend:
 
 class FreshCompileBackend(VerifierBackend):
     """Default: fresh `lean` per checkpoint (SPEC §14). No Mathlib-load amortization."""
-    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body):
+    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body,
+              *, placeholder="", require_closed=False):
         return build_checkpoint(prelude, context, accepted_declarations,
-                                candidate_declaration, candidate_body)
+                                candidate_declaration, candidate_body,
+                                placeholder=placeholder, require_closed=require_closed)
 
     def compile_full_file(self, path):
         return compile_file(path)
@@ -53,9 +56,11 @@ class VerifierClient:
     def __init__(self, backend: Optional[VerifierBackend] = None):
         self.backend = backend or FreshCompileBackend()
 
-    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body):
+    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body,
+              *, placeholder="", require_closed=False):
         return self.backend.check(prelude, context, accepted_declarations,
-                                  candidate_declaration, candidate_body)
+                                  candidate_declaration, candidate_body,
+                                  placeholder=placeholder, require_closed=require_closed)
 
     def compile_full_file(self, path):
         return self.backend.compile_full_file(path)

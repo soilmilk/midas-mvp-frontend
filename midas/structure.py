@@ -39,6 +39,16 @@ def extract_header(body_initial: str) -> str:
 _DECL_NAME = re.compile(r"(?m)^\s*(?:theorem|lemma|def|abbrev|instance)\s+([A-Za-z_][A-Za-z0-9_.']*)")
 _THM_DECL = re.compile(r"(?m)^\s*theorem\s+[A-Za-z_]")
 _SORRY = re.compile(r"\bsorry\b")
+_PLACEHOLDER_DEF = re.compile(
+    r"(?m)^[ \t]*def[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_.']*)\b")
+_TOP_LEVEL_DECL = re.compile(
+    r"(?m)^[ \t]*(?:theorem|lemma|def|abbrev|instance|example|opaque|axiom|"
+    r"inductive|structure|class)\b")
+_FORBIDDEN_COMMAND = re.compile(
+    r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
+    r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
+    r"mutual|include|omit|private|protected|noncomputable|notation|"
+    r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
 
 
 def declared_names(code: str) -> List[str]:
@@ -49,6 +59,115 @@ def declared_names(code: str) -> List[str]:
 class StructureResult:
     ok: bool
     violations: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlaceholderInfo:
+    header: str
+    name: str
+    source: str
+
+
+class PlaceholderError(ValueError):
+    """The placeholder does not match the supported one-definition shape."""
+
+
+def _mask_comments(source: str) -> str:
+    """Replace Lean comments with spaces while retaining exact line positions."""
+    out = list(source)
+    i = 0
+    block_depth = 0
+    in_string = False
+    while i < len(source):
+        if block_depth:
+            if source.startswith("/-", i):
+                out[i:i + 2] = "  "
+                block_depth += 1
+                i += 2
+            elif source.startswith("-/", i):
+                out[i:i + 2] = "  "
+                block_depth -= 1
+                i += 2
+            else:
+                if source[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if in_string:
+            if source[i] == "\\" and i + 1 < len(source):
+                out[i:i + 2] = "  "
+                i += 2
+            else:
+                if source[i] == '"':
+                    in_string = False
+                if source[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if source.startswith("--", i):
+            while i < len(source) and source[i] != "\n":
+                out[i] = " "
+                i += 1
+        elif source.startswith("/-", i):
+            out[i:i + 2] = "  "
+            block_depth = 1
+            i += 2
+        elif source[i] == '"':
+            out[i] = " "
+            in_string = True
+            i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _placeholder_info(source: str, require_sorry: bool) -> PlaceholderInfo:
+    original = source or ""
+    masked = _mask_comments(original)
+    forbidden = _FORBIDDEN_COMMAND.search(masked)
+    if forbidden:
+        command = forbidden.group(0).strip().split()[0]
+        raise PlaceholderError(f"placeholder contains forbidden top-level command: {command}")
+
+    declarations = list(_TOP_LEVEL_DECL.finditer(masked))
+    definitions = list(_PLACEHOLDER_DEF.finditer(masked))
+    if len(declarations) != 1 or len(definitions) != 1:
+        raise PlaceholderError("placeholder must contain exactly one top-level `def`")
+
+    definition = definitions[0]
+    marker = masked.find(BY_MARKER, definition.end())
+    if marker < 0:
+        raise PlaceholderError("placeholder definition must use tactic mode ending in `:= by`")
+    if masked[:definition.start()].strip():
+        raise PlaceholderError("placeholder contains unrelated code before its definition")
+
+    name = definition.group("name")
+    header = original[definition.start():marker + len(BY_MARKER)].rstrip()
+    has_sorry = _SORRY.search(masked) is not None
+    if require_sorry and not has_sorry:
+        raise PlaceholderError("initial placeholder must contain at least one `sorry`")
+    if not require_sorry and has_sorry:
+        raise PlaceholderError("filled placeholder must not contain `sorry`")
+    return PlaceholderInfo(header=header, name=name, source=original)
+
+
+def extract_placeholder_info(source: str) -> PlaceholderInfo:
+    return _placeholder_info(source, require_sorry=True)
+
+
+def check_filled_placeholder(source: str, expected_header: str,
+                             expected_name: str) -> StructureResult:
+    violations: List[str] = []
+    try:
+        info = _placeholder_info(source, require_sorry=False)
+    except PlaceholderError as error:
+        return StructureResult(False, [str(error)])
+    if info.header != expected_header:
+        violations.append("filled placeholder does not begin with the exact original header")
+    if info.name != expected_name:
+        violations.append(
+            f"filled placeholder name changed from {expected_name!r} to {info.name!r}")
+    return StructureResult(not violations, violations)
 
 
 def check_structure(declarations: str, body: str, header: str,

@@ -9,7 +9,8 @@ Implements SPEC.md §14's checkpoint model with a fresh `lean` subprocess per ch
 
   DECLARATION CHECK : prelude + context + accepted_declarations + candidate_declaration
                       must compile with NO `sorry`.
-  BODY CHECK        : + candidate_body, `sorry` ALLOWED.
+  SUFFIX/BODY CHECK : + placeholder + candidate_body, `sorry` allowed unless
+                      require_closed=True.
                       Run ONLY if the declaration check passes — a rejected declaration
                       must never reach the body check.
 
@@ -20,12 +21,17 @@ Diagnostics are parsed against this Lean 4.31 output format (confirmed, not gues
 Per-diagnostic schema (SPEC.md §19): { file, line, col, severity, code, message }.
 """
 from __future__ import annotations
-import os, re, shutil, subprocess, time
+import os, re, shutil, subprocess, sys, time
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-LEAN = shutil.which("lean") or os.path.expanduser("~/.elan/bin/lean")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+from midas.reconstructor import render_source
+
+LEAN = shutil.which("lean") or os.path.expanduser("~/.elan/bin/lean")
 WORK = os.path.join(REPO, ".work")
 
 # file:line:col: severity[(code)]: message   (message may continue on following lines)
@@ -116,27 +122,13 @@ def _compile(source: str, tag: str, prelude_lines_count: int) -> CompileResult:
     return CompileResult(ok, proc.returncode, diags, contains_sorry, out, ms)
 
 
-def _assemble(prelude, decls, tail=None) -> str:
-    parts = []
-    for line in (prelude or []):
-        parts.append(line)
-    if prelude:
-        parts.append("")
-    for d in decls:
-        if d and d.strip():
-            parts.append(d.rstrip())
-            parts.append("")
-    if tail and tail.strip():
-        parts.append(tail.rstrip())
-    return "\n".join(parts).rstrip() + "\n"
-
-
 def _errs(cr: CompileResult) -> list:
     return [asdict(d) for d in cr.diagnostics if d.severity == "error"]
 
 
 def build_checkpoint(prelude, context, accepted_declarations,
-                     candidate_declaration, candidate_body) -> CheckpointResult:
+                     candidate_declaration, candidate_body, *,
+                     placeholder="", require_closed=False) -> CheckpointResult:
     """
     prelude: list of full Lean lines (SPEC §2 lean_prelude); [] for core/std.
     context: contents of input/context.lean (immutable base). Always included.
@@ -144,12 +136,14 @@ def build_checkpoint(prelude, context, accepted_declarations,
     candidate_declaration / candidate_body: the attempt under test (declarations may be empty).
     """
     t0 = time.perf_counter()
-    decls = [context] + list(accepted_declarations)
-    n_pre = len(prelude or [])
-
     # 1. DECLARATION CHECK — no sorry allowed.
-    decl_src = _assemble(prelude, decls + ([candidate_declaration] if candidate_declaration else []))
-    dr = _compile(decl_src, "check_declarations", n_pre)
+    decl_src = render_source(
+        prelude,
+        context,
+        accepted_declarations,
+        candidate_declarations=candidate_declaration,
+    ).text
+    dr = _compile(decl_src, "check_declarations", len(prelude or []))
     decl_pass = dr.ok and not dr.contains_sorry
     declaration_check = CheckResult("passed" if decl_pass else "failed", _errs(dr))
     if decl_pass and dr.contains_sorry:  # (unreachable given decl_pass, kept explicit)
@@ -161,11 +155,18 @@ def build_checkpoint(prelude, context, accepted_declarations,
         return CheckpointResult(declaration_check, CheckResult("not_run"), None,
                                 dr.ms, 0.0, wall, dr.raw, "")
 
-    # 2. BODY CHECK — sorry allowed.
-    body_src = _assemble(prelude, decls + ([candidate_declaration] if candidate_declaration else []),
-                         tail=candidate_body)
-    br = _compile(body_src, "check_body", n_pre)
-    body_check = CheckResult("passed" if br.ok else "failed", _errs(br))
+    # 2. SUFFIX/BODY CHECK — sorry is allowed unless this is finalization.
+    body_src = render_source(
+        prelude,
+        context,
+        accepted_declarations,
+        candidate_declarations=candidate_declaration,
+        placeholder=placeholder,
+        theorem_body=candidate_body,
+    ).text
+    br = _compile(body_src, "check_body", len(prelude or []))
+    body_pass = br.ok and not (require_closed and br.contains_sorry)
+    body_check = CheckResult("passed" if body_pass else "failed", _errs(br))
     wall = (time.perf_counter() - t0) * 1000
     return CheckpointResult(declaration_check, body_check, br.contains_sorry,
                             dr.ms, br.ms, wall, dr.raw, br.raw)

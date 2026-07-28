@@ -45,10 +45,13 @@ class LeanArtifactLogger:
             os.makedirs(d, exist_ok=True)
 
     # -- input --
-    def write_inputs(self, config_json: str, informal: str, context: str, body_initial: str):
+    def write_inputs(self, config_json: str, informal: str, context: str, body_initial: str,
+                     placeholder: Optional[str] = None):
         _w(os.path.join(self.p.root, "config.json"), config_json)
         _w(os.path.join(self.p.input, "informal_problem.md"), informal)
         _w(os.path.join(self.p.input, "context.lean"), context)
+        if placeholder is not None:
+            _w(os.path.join(self.p.input, "placeholder.lean"), placeholder)
         _w(os.path.join(self.p.input, "body_initial.lean"), body_initial)
 
     def write_input_check(self, name: str, cj: CompileJson):

@@ -13,7 +13,7 @@ from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
 from .parser import parse_translator_output
 from .structure import (extract_header, check_structure, body_contains_sorry, declared_names)
 from .verifier_client import VerifierClient, make_verifier, build_compile_json
-from .reconstructor import reconstruct
+from .reconstructor import reconstruct, render_source
 from .artifacts import Paths, LeanArtifactLogger, StateManager
 
 CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "considerations")
@@ -52,25 +52,16 @@ def _accepted_summary(decls: List[str]) -> str:
 def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
                       declarations: str, body: str, warm: bool) -> str:
     """Reproduce the source layout used by the selected verifier for location mapping."""
-    if warm:
-        pre = [line for line in (prelude or []) if not line.strip().startswith("import ")]
-        blocks = [context] + list(accepted_decls)
-        if declarations.strip():
-            blocks.append(declarations)
-        source = "\n".join(pre + ["\n\n".join(blocks)])
-        if body.strip():
-            source += "\n\n" + body
-        return source
-
-    parts = list(prelude or [])
-    if prelude:
-        parts.append("")
-    for block in [context] + list(accepted_decls) + ([declarations] if declarations.strip() else []):
-        if block and block.strip():
-            parts.extend([block.rstrip(), ""])
-    if body and body.strip():
-        parts.append(body.rstrip())
-    return "\n".join(parts).rstrip() + "\n"
+    submitted_prelude = ([line for line in (prelude or [])
+                          if not line.strip().startswith("import ")]
+                         if warm else prelude)
+    return render_source(
+        submitted_prelude,
+        context,
+        accepted_decls,
+        candidate_declarations=declarations,
+        theorem_body=body,
+    ).text
 
 
 def _line_range(source: str, fragment: str, start_at: int = 0) -> tuple[int, int]:
@@ -194,7 +185,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         initial_body_path=prob.initial_body_path,
         stats=RunStats(started_at=time.strftime("%Y-%m-%dT%H:%M:%S")))
     logger.write_inputs(prob.config.model_dump_json(indent=2),
-                        prob.informal_problem, prob.context, prob.body_initial)
+                        prob.informal_problem, prob.context, prob.body_initial,
+                        placeholder=prob.placeholder)
 
     start = _now()
     deadline = start + prob.config.max_runtime_seconds
@@ -222,7 +214,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         failures.write(state, "initial_body_failed", prob.context, prob.body_initial, str(e), category_counts)
         return finish()
     state.formal_theorem_header = vr.header
-    state.stats.total_lean_compiles += 2
+    state.stats.total_lean_compiles += vr.compile_count
     if not vr.ok:
         bump(vr.reason)
         failures.write(state, vr.reason, prob.context, prob.body_initial,

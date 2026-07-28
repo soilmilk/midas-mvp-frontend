@@ -23,6 +23,7 @@ import os, re, subprocess, time
 from dataclasses import asdict
 from pathlib import Path
 
+from midas.reconstructor import render_source
 from verifier.checkpoint_builder import CheckpointResult, CheckResult, CompileResult, Diag
 
 _NODE = re.compile(r"\[node \d+\]\s+\d+\s*ms\s+(.*)")
@@ -109,12 +110,16 @@ class WarmTxnBackend:
     def _strip_imports(prelude):
         return [l for l in prelude if not l.strip().startswith("import ")]
 
-    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body):
+    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body,
+              *, placeholder="", require_closed=False):
         t0 = time.perf_counter()
         pre = self._strip_imports(prelude)
-        parts = ([context] + list(accepted_declarations)
-                 + ([candidate_declaration] if (candidate_declaration or "").strip() else []))
-        decl_block = "\n".join(pre + ["\n\n".join(parts)])
+        decl_block = render_source(
+            pre,
+            context,
+            accepted_declarations,
+            candidate_declarations=candidate_declaration,
+        ).text
 
         v1 = self._submit(decl_block)
         if not v1.startswith("ACCEPT"):
@@ -122,11 +127,20 @@ class WarmTxnBackend:
             return CheckpointResult(CheckResult("failed", _warm_diags(v1)), CheckResult("not_run"),
                                     None, 0.0, 0.0, wall, v1, "")
 
-        body_block = decl_block + "\n\n" + (candidate_body or "")
+        body_block = render_source(
+            pre,
+            context,
+            accepted_declarations,
+            candidate_declarations=candidate_declaration,
+            placeholder=placeholder,
+            theorem_body=candidate_body,
+        ).text
         v2 = self._submit(body_block)
-        body_ok = v2.startswith("ACCEPT") or v2.startswith("OPEN")
+        body_open = v2.startswith("OPEN")
+        body_ok = v2.startswith("ACCEPT") or (body_open and not require_closed)
         contains_sorry = v2.startswith("OPEN")
-        body_check = CheckResult("passed" if body_ok else "failed", [] if body_ok else _warm_diags(v2))
+        body_errors = [] if (v2.startswith("ACCEPT") or body_open) else _warm_diags(v2)
+        body_check = CheckResult("passed" if body_ok else "failed", body_errors)
         wall = (time.perf_counter() - t0) * 1000
         return CheckpointResult(CheckResult("passed"), body_check, contains_sorry, 0.0, 0.0, wall, v1, v2)
 
