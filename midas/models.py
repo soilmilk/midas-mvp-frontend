@@ -62,6 +62,7 @@ class CheckReport(BaseModel):
 
 class CompileJson(BaseModel):
     attempt_status: str              # §17 lean_translation_attempt.status
+    attempt_kind: AttemptKind = "exploration"
     structure_check: CheckReport = Field(default_factory=CheckReport)
     declaration_check: CheckReport = Field(default_factory=CheckReport)
     body_check: CheckReport = Field(default_factory=CheckReport)
@@ -73,15 +74,20 @@ class CompileJson(BaseModel):
 class LeanTranslationAttempt(BaseModel):
     lean_translation_attempt_index: int
     # pending | parse_error | format_failed | lemma_failed | body_failed | accepted
+    #        | placeholder_format_failed | placeholder_fill_failed
     #        | final_success | final_reconstruction_failed
+    #        | hard_full_reconstruction_failed
     # parse_error  = raw output could not be parsed into the required sections (§11)
     # format_failed = parsed OK but broke a structure rule (§8/§12)
     status: str = "pending"
     translator_prompt_path: Optional[str] = None
     raw_translator_output_path: Optional[str] = None
     declarations_path: Optional[str] = None
+    placeholder_path: Optional[str] = None
     body_path: Optional[str] = None
     compile_path: Optional[str] = None
+    attempt_kind: AttemptKind = "exploration"
+    proposed_final_answer: Optional[str] = None
 
 
 class InformalCandidate(BaseModel):
@@ -112,6 +118,13 @@ class ProofRunState(BaseModel):
     informal_problem_path: str
     context_path: str
     initial_body_path: str
+    problem_mode: str = "easy"
+    placeholder_path: Optional[str] = None
+    placeholder_initial_source: Optional[str] = None
+    placeholder_header: Optional[str] = None
+    placeholder_name: Optional[str] = None
+    placeholder_status: Optional[str] = None
+    placeholder_final_source: Optional[str] = None
     formal_theorem_header: str = ""
     current_knowledge: List[str] = Field(default_factory=list)
     status: str = "running"          # running | final_success | failed

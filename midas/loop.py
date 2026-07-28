@@ -7,13 +7,14 @@ import os, re, time
 from typing import List, Optional
 
 from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
-                     RunStats, CompileJson, CheckReport, Diagnostic)
+                     RunStats, CompileJson, CheckReport, Diagnostic, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
 from .parser import parse_reasoning_action, parse_translator_output
-from .structure import (extract_header, check_structure, body_contains_sorry, declared_names)
+from .structure import (check_filled_placeholder, check_structure,
+                        body_contains_sorry, declared_names)
 from .verifier_client import VerifierClient, make_verifier, build_compile_json
-from .reconstructor import reconstruct, render_source
+from .reconstructor import reconstruct, reconstruct_hard, render_source
 from .artifacts import Paths, LeanArtifactLogger, StateManager
 
 CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "considerations")
@@ -28,8 +29,31 @@ def _feedback_from_errors(errs: List[Diagnostic]) -> str:
                      f"{'('+e.code+')' if e.code else ''}: {e.message}" for e in errs) or "(no detail)"
 
 
+def _diagnostics(errors) -> List[Diagnostic]:
+    out = []
+    for error in errors or []:
+        if isinstance(error, Diagnostic):
+            out.append(error)
+        else:
+            out.append(Diagnostic(
+                file=error.get("file", ""),
+                line=int(error.get("line") or 0),
+                col=int(error.get("col") or 0),
+                severity=error.get("severity", "error"),
+                code=error.get("code", ""),
+                message=error.get("message", ""),
+            ))
+    return out
+
+
+def _errors_in_fragment(errors: List[Diagnostic], source: str, fragment: str) -> bool:
+    first, last = _line_range(source, fragment)
+    return first > 0 and any(first <= error.line <= last for error in errors)
+
+
 def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
-                      declarations: str, body: str, warm: bool) -> str:
+                      declarations: str, body: str, warm: bool,
+                      placeholder: str = "") -> str:
     """Reproduce the source layout used by the selected verifier for location mapping."""
     submitted_prelude = ([line for line in (prelude or [])
                           if not line.strip().startswith("import ")]
@@ -39,6 +63,7 @@ def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str
         context,
         accepted_decls,
         candidate_declarations=declarations,
+        placeholder=placeholder,
         theorem_body=body,
     ).text
 
@@ -54,11 +79,25 @@ def _line_range(source: str, fragment: str, start_at: int = 0) -> tuple[int, int
 
 
 def _render_repair_diagnostics(errors: List[Diagnostic], source: str, declarations: str,
-                               body: str) -> str:
+                               body: str, placeholder: str = "",
+                               attempt_kind: str = "exploration") -> str:
     """Render every diagnostic with its owning region and a numbered nearby excerpt."""
     decl_range = _line_range(source, declarations)
-    body_range = _line_range(source, body, source.find(declarations.rstrip()) + len(declarations.rstrip())
-                             if declarations.strip() else 0)
+    after_declarations = (
+        source.find(declarations.rstrip()) + len(declarations.rstrip())
+        if declarations.strip() else 0
+    )
+    placeholder_range = _line_range(source, placeholder, after_declarations)
+    after_placeholder = (
+        source.find(placeholder.rstrip(), after_declarations) + len(placeholder.rstrip())
+        if placeholder.strip() else after_declarations
+    )
+    body_range = _line_range(source, body, after_placeholder)
+    body_heading = (
+        "UPDATED THEOREM BODY"
+        if attempt_kind == "exploration"
+        else "FINAL THEOREM BODY"
+    )
     lines = source.splitlines()
     rendered = []
     for index, error in enumerate(errors, 1):
@@ -69,8 +108,14 @@ def _render_repair_diagnostics(errors: List[Diagnostic], source: str, declaratio
                 line, col = int(embedded.group(1)), int(embedded.group(2))
         if decl_range[0] <= line <= decl_range[1]:
             region = "rejected NEW DECLARATIONS"
+        elif placeholder_range[0] <= line <= placeholder_range[1]:
+            region = (
+                "rejected FILLED PLACEHOLDER"
+                if attempt_kind == "hard_finalization"
+                else "unresolved PLACEHOLDER"
+            )
         elif body_range[0] <= line <= body_range[1]:
-            region = "rejected UPDATED THEOREM BODY"
+            region = f"rejected {body_heading}"
         else:
             region = "prelude, context, or previously accepted code"
         code = f" ({error.code})" if error.code else ""
@@ -162,6 +207,12 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         informal_problem_path=prob.informal_problem_path,
         context_path=prob.context_path,
         initial_body_path=prob.initial_body_path,
+        problem_mode=prob.config.problem_mode,
+        placeholder_path=prob.placeholder_path,
+        placeholder_initial_source=prob.placeholder,
+        placeholder_status=(
+            "unresolved" if prob.config.problem_mode == "hard" else None
+        ),
         stats=RunStats(started_at=time.strftime("%Y-%m-%dT%H:%M:%S")))
     logger.write_inputs(prob.config.model_dump_json(indent=2),
                         prob.informal_problem, prob.context, prob.body_initial,
@@ -193,6 +244,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         failures.write(state, "initial_body_failed", prob.context, prob.body_initial, str(e), category_counts)
         return finish()
     state.formal_theorem_header = vr.header
+    state.placeholder_header = vr.placeholder_header or None
+    state.placeholder_name = vr.placeholder_name or None
     state.stats.total_lean_compiles += vr.compile_count
     if not vr.ok:
         bump(vr.reason)
@@ -201,6 +254,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         return finish()
 
     header = vr.header
+    problem_mode = prob.config.problem_mode
+    placeholder_initial_source = vr.placeholder_initial_source
+    placeholder_header = vr.placeholder_header
+    placeholder_name = vr.placeholder_name
     prelude = prob.config.lean_prelude
     reasoning = ReasoningAgent(prob.config.reasoning_model, _read(os.path.join(CONSID, "INFORMAL_REASONING_CONSIDERATIONS.md")), reasoning_offline, reasoning_effort=prob.config.reasoning_effort)
     translation = TranslationAgent(prob.config.translation_model, _read(os.path.join(CONSID, "FORMAL_TRANSLATION_CONSIDERATIONS.md")), translation_offline)
@@ -264,6 +321,9 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 continue
 
             informal_candidate = action.informal_step
+            attempt_kind = attempt_kind_for(
+                problem_mode, bool(action.is_final_step)
+            )
             candidate_accepted = False
             compiler_feedback = ""
             repair_context = None
@@ -277,7 +337,19 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 try:
                     t = translation.translate(header, prob.informal_problem, prelude, prob.context, accepted_decls,
                                               latest_body, informal_candidate,
-                                              compiler_feedback=compiler_feedback, repair_context=repair_context, attempt_index=k - 1,
+                                              compiler_feedback=compiler_feedback,
+                                              repair_context=repair_context,
+                                              attempt_kind=attempt_kind,
+                                              placeholder_header=(
+                                                  placeholder_header
+                                                  if problem_mode == "hard" else None
+                                              ),
+                                              placeholder_initial_source=(
+                                                  placeholder_initial_source
+                                                  if problem_mode == "hard" else None
+                                              ),
+                                              answer=action.answer,
+                                              attempt_index=k - 1,
                                               timeout=call_timeout())
                 except Exception as e:                      # timeout / API error — don't crash
                     state.stats.total_llm_calls += 1
@@ -287,72 +359,187 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     statemgr.save(state); continue
                 state.stats.total_llm_calls += 1
                 state.stats.total_lean_attempts += 1
-                la = LeanTranslationAttempt(lean_translation_attempt_index=k)
+                la = LeanTranslationAttempt(
+                    lean_translation_attempt_index=k,
+                    attempt_kind=attempt_kind,
+                    proposed_final_answer=(
+                        action.answer if attempt_kind == "hard_finalization" else None
+                    ),
+                )
                 ic.lean_translation_attempts.append(la)
 
-                pr = parse_translator_output(t.text)
+                pr = parse_translator_output(t.text, attempt_kind)
 
                 # ---- parse (§11): raw output could not be parsed -> parse_error ----
                 if not pr.ok:
-                    cj = build_compile_json("parse_error",
-                                            _struct(False, [f"parse: {pr.error}"]))
-                    _log_attempt(logger, la, paths, i, j, k, t, None, None, cj)
+                    cj = build_compile_json(
+                        "parse_error",
+                        _struct(False, [f"parse: {pr.error}"]),
+                        attempt_kind=attempt_kind,
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t, None, None, cj
+                    )
                     la.status = "parse_error"; bump("parse_error")
-                    compiler_feedback = f"Your output was not parseable: {pr.error}. Emit the two required sections."
+                    compiler_feedback = (
+                        f"Your output was not parseable: {pr.error}. "
+                        "Emit the complete required transaction."
+                    )
                     repair_context = None
                     statemgr.save(state); continue
 
                 prev_names = _names(accepted_decls)
                 sr = check_structure(pr.declarations, pr.body, header, prev_names)
+                if attempt_kind != "exploration" and body_contains_sorry(pr.body):
+                    sr.violations.append("final theorem body contains `sorry`")
+                    sr.ok = False
+                if attempt_kind == "hard_finalization":
+                    placeholder_sr = check_filled_placeholder(
+                        pr.placeholder or "", placeholder_header, placeholder_name
+                    )
+                    sr.violations.extend(placeholder_sr.violations)
+                    sr.ok = sr.ok and placeholder_sr.ok
                 if not sr.ok:
-                    cj = build_compile_json("format_failed", sr)
-                    _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
-                    la.status = "format_failed"
-                    bump("changed_theorem_statement" if any("header" in v for v in sr.violations) else "bad_output_format")
-                    compiler_feedback = "Structure check failed: " + "; ".join(sr.violations)
-                    repair_context = None
+                    status = (
+                        "placeholder_format_failed"
+                        if attempt_kind == "hard_finalization"
+                        and any("placeholder" in v for v in sr.violations)
+                        else "format_failed"
+                    )
+                    cj = build_compile_json(
+                        status, sr, attempt_kind=attempt_kind
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t,
+                        pr.declarations, pr.body, cj,
+                        placeholder=pr.placeholder,
+                    )
+                    la.status = status
+                    if status == "placeholder_format_failed":
+                        bump("placeholder_format_failed")
+                    else:
+                        bump("changed_theorem_statement"
+                             if any("header" in v for v in sr.violations)
+                             else "bad_output_format")
+                    structure_feedback = (
+                        "Structure check failed:\n"
+                        + "\n".join(f"- {v}" for v in sr.violations)
+                    )
+                    compiler_feedback = structure_feedback
+                    repair_context = TranslationRepairContext(
+                        failed_check="structure_check",
+                        raw_output=t.text,
+                        declarations=pr.declarations or "",
+                        placeholder=pr.placeholder or "",
+                        body=pr.body or "",
+                        diagnostics=structure_feedback,
+                        attempt_kind=attempt_kind,
+                    )
                     statemgr.save(state); continue
 
                 # ---- declaration check then body check (§14) ----
-                cp = verifier.check(prelude, prob.context, accepted_decls, pr.declarations, pr.body)
+                candidate_placeholder = (
+                    placeholder_initial_source
+                    if attempt_kind == "exploration" and problem_mode == "hard"
+                    else (pr.placeholder or "")
+                    if attempt_kind == "hard_finalization"
+                    else ""
+                )
+                cp = verifier.check(
+                    prelude,
+                    prob.context,
+                    accepted_decls,
+                    pr.declarations,
+                    pr.body,
+                    placeholder=candidate_placeholder,
+                    require_closed=(attempt_kind != "exploration"),
+                )
                 state.stats.total_lean_compiles += 1
                 if not cp.declaration_check.passed:
-                    cj = build_compile_json("lemma_failed", sr, cp)
-                    _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
+                    cj = build_compile_json(
+                        "lemma_failed", sr, cp, attempt_kind=attempt_kind
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t,
+                        pr.declarations, pr.body, cj,
+                        placeholder=pr.placeholder,
+                    )
                     la.status = "lemma_failed"; bump("new_declaration_does_not_compile")
                     last_error = cp.declaration_raw
                     compiler_feedback = "Declaration failed to compile:\n" + _feedback_from_errors(cj.declaration_check.errors)
                     submitted = _submitted_source(prelude, prob.context, accepted_decls,
                                                   pr.declarations, pr.body,
-                                                  prob.config.verifier_backend == "warm")
+                                                  prob.config.verifier_backend == "warm",
+                                                  candidate_placeholder)
                     repair_context = TranslationRepairContext(
                         failed_check="declaration_check", raw_output=t.text,
                         declarations=pr.declarations, body=pr.body,
+                        placeholder=pr.placeholder or "",
+                        attempt_kind=attempt_kind,
                         diagnostics=_render_repair_diagnostics(
-                            cj.declaration_check.errors, submitted, pr.declarations, pr.body))
+                            cj.declaration_check.errors, submitted,
+                            pr.declarations, pr.body, candidate_placeholder,
+                            attempt_kind))
                     statemgr.save(state); continue
 
                 state.stats.total_lean_compiles += 1
                 if not cp.body_check.passed:
-                    cj = build_compile_json("body_failed", sr, cp)
-                    _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
-                    la.status = "body_failed"; bump("body_does_not_compile")
+                    status = (
+                        "placeholder_fill_failed"
+                        if attempt_kind == "hard_finalization"
+                        and _errors_in_fragment(
+                            _diagnostics(cp.body_check.errors),
+                            _submitted_source(
+                                prelude, prob.context, accepted_decls,
+                                pr.declarations, pr.body,
+                                prob.config.verifier_backend == "warm",
+                                candidate_placeholder,
+                            ),
+                            candidate_placeholder,
+                        )
+                        else "body_failed"
+                    )
+                    cj = build_compile_json(
+                        status, sr, cp, attempt_kind=attempt_kind
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t,
+                        pr.declarations, pr.body, cj,
+                        placeholder=pr.placeholder,
+                    )
+                    la.status = status
+                    bump(status if status == "placeholder_fill_failed"
+                         else "body_does_not_compile")
                     last_error = cp.body_raw
-                    compiler_feedback = "Body failed to compile:\n" + _feedback_from_errors(cj.body_check.errors)
+                    compiler_feedback = (
+                        "Finalization suffix failed to compile:\n"
+                        if attempt_kind != "exploration"
+                        else "Body failed to compile:\n"
+                    ) + _feedback_from_errors(cj.body_check.errors)
                     submitted = _submitted_source(prelude, prob.context, accepted_decls,
                                                   pr.declarations, pr.body,
-                                                  prob.config.verifier_backend == "warm")
+                                                  prob.config.verifier_backend == "warm",
+                                                  candidate_placeholder)
                     repair_context = TranslationRepairContext(
                         failed_check="body_check", raw_output=t.text,
                         declarations=pr.declarations, body=pr.body,
+                        placeholder=pr.placeholder or "",
+                        attempt_kind=attempt_kind,
                         diagnostics=_render_repair_diagnostics(
-                            cj.body_check.errors, submitted, pr.declarations, pr.body))
+                            cj.body_check.errors, submitted,
+                            pr.declarations, pr.body, candidate_placeholder,
+                            attempt_kind))
                     statemgr.save(state); continue
 
                 # ---- both checks passed ----
-                if body_contains_sorry(pr.body):
-                    cj = build_compile_json("accepted", sr, cp)
-                    _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
+                if attempt_kind == "exploration":
+                    cj = build_compile_json(
+                        "accepted", sr, cp, attempt_kind=attempt_kind
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t,
+                        pr.declarations, pr.body, cj,
+                    )
                     la.status = "accepted"; ic.status = "accepted"; ps.status = "accepted"
                     logger.copy_accepted(i, pr.declarations, pr.body)
                     accepted_decls.append(pr.declarations); latest_body = pr.body
@@ -363,25 +550,95 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     candidate_accepted = step_accepted = True
                     statemgr.save(state); break
                 else:
-                    # ---- final: reconstruct + independent compile (§14 hard rule) ----
-                    full = reconstruct(prelude, prob.context, accepted_decls + [pr.declarations], pr.body)
-                    final_path = logger.write_final(full, _solution_md(prob, state))
-                    fr = verifier.compile_full_file(final_path)
+                    # Final proposals remain non-authoritative until this exact
+                    # reconstruction compiles independently without `sorry`.
+                    if attempt_kind == "hard_finalization":
+                        full = reconstruct_hard(
+                            prelude,
+                            prob.context,
+                            accepted_decls + [pr.declarations],
+                            pr.placeholder or "",
+                            pr.body,
+                        )
+                    else:
+                        full = reconstruct(
+                            prelude,
+                            prob.context,
+                            accepted_decls + [pr.declarations],
+                            pr.body,
+                        )
+                    candidate_path = logger.write_final_candidate(full)
+                    fr = verifier.compile_full_file(candidate_path)
                     state.stats.total_lean_compiles += 1
                     fc = _final_report(fr)
                     if fr.ok and not fr.contains_sorry:
-                        cj = build_compile_json("final_success", sr, cp, fc)
-                        _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
-                        logger.copy_accepted(i, pr.declarations, pr.body)
+                        cj = build_compile_json(
+                            "final_success", sr, cp, fc,
+                            attempt_kind=attempt_kind,
+                        )
+                        _log_attempt(
+                            logger, la, paths, i, j, k, t,
+                            pr.declarations, pr.body, cj,
+                            placeholder=pr.placeholder,
+                        )
+                        logger.copy_accepted(
+                            i, pr.declarations, pr.body,
+                            placeholder=pr.placeholder,
+                        )
+                        logger.write_final(
+                            full,
+                            _solution_md(prob, state, "final_success"),
+                            placeholder=pr.placeholder,
+                            body=pr.body,
+                        )
+                        accepted_decls.append(pr.declarations)
+                        latest_body = pr.body
+                        if attempt_kind == "hard_finalization":
+                            state.placeholder_final_source = pr.placeholder
+                            state.placeholder_status = "filled"
                         la.status = "final_success"; ic.status = "accepted"; ps.status = "final_success"
                         state.status = "final_success"; state.stats.accepted_proof_steps += 1
                         return finish()
                     else:
-                        cj = build_compile_json("final_reconstruction_failed", sr, cp, fc)
-                        _log_attempt(logger, la, paths, i, j, k, t, pr.declarations, pr.body, cj)
-                        la.status = "final_reconstruction_failed"; bump("final_reconstruction_failed")
+                        status = (
+                            "hard_full_reconstruction_failed"
+                            if attempt_kind == "hard_finalization"
+                            else "final_reconstruction_failed"
+                        )
+                        cj = build_compile_json(
+                            status, sr, cp, fc, attempt_kind=attempt_kind
+                        )
+                        _log_attempt(
+                            logger, la, paths, i, j, k, t,
+                            pr.declarations, pr.body, cj,
+                            placeholder=pr.placeholder,
+                        )
+                        la.status = status; bump(status)
                         last_error = fr.raw
                         compiler_feedback = "Reconstructed solution failed to compile:\n" + fr.raw[:800]
+                        final_errors = [
+                            Diagnostic(
+                                file=e.file,
+                                line=e.line,
+                                col=e.col,
+                                severity=e.severity,
+                                code=e.code,
+                                message=e.message,
+                            )
+                            for e in fr.errors
+                        ]
+                        repair_context = TranslationRepairContext(
+                            failed_check="final_check",
+                            raw_output=t.text,
+                            declarations=pr.declarations,
+                            placeholder=pr.placeholder or "",
+                            body=pr.body,
+                            diagnostics=_render_repair_diagnostics(
+                                final_errors, full, pr.declarations, pr.body,
+                                pr.placeholder or "", attempt_kind,
+                            ),
+                            attempt_kind=attempt_kind,
+                        )
                         statemgr.save(state); continue
 
             if candidate_accepted:
@@ -440,11 +697,22 @@ def _check_errs(vr):
 def _env_text(prelude, context, accepted_decls):
     return reconstruct(prelude, context, accepted_decls, "-- (theorem body omitted)")
 
-def _solution_md(prob, state):
-    return f"# Solution — {prob.problem_id}\n\nStatus: {state.status}\nAccepted steps: {state.stats.accepted_proof_steps}\n"
+def _solution_md(prob, state, status=None):
+    return (
+        f"# Solution — {prob.problem_id}\n\n"
+        f"Status: {status or state.status}\n"
+        f"Accepted steps: {state.stats.accepted_proof_steps + 1}\n"
+    )
 
-def _log_attempt(logger, la, paths, i, j, k, t, decls, body, cj):
-    dp, bp, cjp = logger.write_translation(i, j, k, t.prompt, t.text, decls, body, cj)
+def _log_attempt(logger, la, paths, i, j, k, t, decls, body, cj,
+                 placeholder=None):
+    dp, pp, bp, cjp = logger.write_translation(
+        i, j, k, t.prompt, t.text, decls, body, cj,
+        placeholder=placeholder,
+    )
     la.translator_prompt_path = os.path.join(paths.la(i, j, k), "translator_prompt.md")
     la.raw_translator_output_path = os.path.join(paths.la(i, j, k), "raw_translator_output.md")
-    la.declarations_path, la.body_path, la.compile_path = dp, bp, cjp
+    la.declarations_path = dp
+    la.placeholder_path = pp
+    la.body_path = bp
+    la.compile_path = cjp

@@ -197,6 +197,12 @@ def check_structure(declarations: str, body: str, header: str,
     n_thm = len(_THM_DECL.findall(body or ""))
     if n_thm != 1:
         v.append(f"body must contain exactly one theorem declaration, found {n_thm}")
+    n_body_decls = len(_TOP_LEVEL_DECL.findall(_mask_comments(body or "")))
+    if n_body_decls != 1:
+        v.append(
+            "body must contain only the target theorem declaration, "
+            f"found {n_body_decls} top-level declarations"
+        )
 
     # §8: body must begin byte-for-byte with the stored header (tolerate only leading blank space)
     if not body.lstrip().startswith(header.lstrip()):

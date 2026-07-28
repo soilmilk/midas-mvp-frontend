@@ -16,8 +16,9 @@ PROB = os.path.join(ROOT, "problems", "toy")
 RUNS = os.path.join(ROOT, ".test_runs")
 shutil.rmtree(RUNS, ignore_errors=True)
 
-def T(decls, body):
-    return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\nUPDATED THEOREM BODY:\n\n```\n{body}\n```\n"
+def T(decls, body, final=False):
+    heading = "FINAL THEOREM BODY" if final else "UPDATED THEOREM BODY"
+    return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\n{heading}:\n\n```\n{body}\n```\n"
 
 reasoning = [
     "",                                                                            # candidate1: empty reasoning output
@@ -32,11 +33,12 @@ translation = [
     "unparseable attempt two",
     "unparseable attempt three",
     T("-- A evaluates to 5.\ntheorem A_eq : A = 5 := by decide",
-      "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  sorry"),         # candidate2: accepted OPEN
+      "theorem main : f A = f B := by\n  decide"),                                  # candidate2: non-final CLOSED, still exploration
     T("-- B evaluates to 5.\ntheorem B_eq : B = 5 := by decide",
       "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  have hB : B = 5 := B_eq\n  sorry"),  # step2: OPEN
     T("-- Combine.\ntheorem key : f A = f B := by rw [A_eq, B_eq]",
-      "theorem main : f A = f B := by\n  exact key"),                               # step3: final_success
+      "theorem main : f A = f B := by\n  exact key",
+      final=True),                                                                  # step3: final_success
 ]
 
 state = run_problem(PROB, runs_root=RUNS,
@@ -46,8 +48,12 @@ root = os.path.join(RUNS, "toy")
 checks = []
 checks.append(("final status == final_success", state.status == "final_success"))
 checks.append(("accepted proof steps == 3", state.stats.accepted_proof_steps == 3))
+checks.append(("non-final closed body does not finish the run",
+               len(state.proof_steps) == 3 and
+               state.proof_steps[0].status == "accepted"))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
 checks.append(("final/solution.lean written", os.path.exists(os.path.join(root, "final", "solution.lean"))))
+checks.append(("final/body.lean written", os.path.exists(os.path.join(root, "final", "body.lean"))))
 multiline_candidate = """INTERMEDIATE REASONING:
 irrelevant
 
@@ -105,6 +111,15 @@ else:
     checks.append(("candidate3 reasoning prompt written", False))
 checks.append(("accepted/proof_step_001..003 present",
                all(os.path.exists(os.path.join(root, "accepted", f"proof_step_{n:03d}", "body.lean")) for n in (1, 2, 3))))
+final_compile = os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_003",
+    "informal_candidate_001", "lean4_attempt_001", "compile.json",
+)
+if os.path.exists(final_compile):
+    checks.append(("Easy final attempt kind is explicit",
+                   json.load(open(final_compile))["attempt_kind"] == "easy_finalization"))
+else:
+    checks.append(("Easy final compile artifact written", False))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step
 st = StateManager.load(root)
 inv = all(sum(1 for c in s.informal_candidates if c.status == "accepted") == 1

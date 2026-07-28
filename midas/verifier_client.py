@@ -93,10 +93,15 @@ def _report(check) -> CheckReport:
 
 def build_compile_json(attempt_status: str, structure: StructureResult,
                        cp: CheckpointResult = None,
-                       final_check: CheckReport = None) -> CompileJson:
+                       final_check: CheckReport = None,
+                       attempt_kind: str = "exploration") -> CompileJson:
     sc = CheckReport(status="passed" if structure.ok else "failed",
                      errors=[Diagnostic(message=v, severity="error") for v in structure.violations])
-    cj = CompileJson(attempt_status=attempt_status, structure_check=sc)
+    cj = CompileJson(
+        attempt_status=attempt_status,
+        attempt_kind=attempt_kind,
+        structure_check=sc,
+    )
     if cp is not None:
         cj.declaration_check = _report(cp.declaration_check)
         cj.body_check = _report(cp.body_check)

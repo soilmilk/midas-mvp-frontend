@@ -3,10 +3,11 @@ Artifact layout (§6) + LeanArtifactLogger + StateManager persistence.
 
 Exact §6 tree:
   runs/<pid>/ config.json state.json
-    input/ (informal_problem.md context.lean body_initial.lean *_check.json)
+    input/ (informal_problem.md context.lean [placeholder.lean] body_initial.lean *_check.json)
     artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{...}
-    accepted/proof_step_NNN/{declarations.lean,body.lean}
-    tmp/ final/{solution.lean,solution.md} failure/{failure_report.md,...}
+    accepted/proof_step_NNN/{declarations.lean,[placeholder.lean],body.lean}
+    tmp/ final/{solution.lean,solution.md,[placeholder.lean],body.lean}
+    failure/{failure_report.md,...}
 """
 from __future__ import annotations
 import json, os, shutil
@@ -64,28 +65,46 @@ class LeanArtifactLogger:
 
     # -- translation (la level) --
     def write_translation(self, i, j, k, prompt: str, raw: str,
-                          declarations: Optional[str], body: Optional[str], cj: CompileJson):
+                          declarations: Optional[str], body: Optional[str], cj: CompileJson,
+                          placeholder: Optional[str] = None):
         d = self.p.la(i, j, k)
         _w(os.path.join(d, "translator_prompt.md"), prompt)
         _w(os.path.join(d, "raw_translator_output.md"), raw)
         if declarations is not None:
             _w(os.path.join(d, "declarations.lean"), declarations)
+        if placeholder is not None:
+            _w(os.path.join(d, "placeholder.lean"), placeholder)
         if body is not None:
             _w(os.path.join(d, "body.lean"), body)
         _w(os.path.join(d, "compile.json"), cj.model_dump_json(indent=2))
         return (os.path.join(d, "declarations.lean") if declarations is not None else None,
+                os.path.join(d, "placeholder.lean") if placeholder is not None else None,
                 os.path.join(d, "body.lean") if body is not None else None,
                 os.path.join(d, "compile.json"))
 
-    def copy_accepted(self, i, declarations: str, body: str):
+    def copy_accepted(self, i, declarations: str, body: str,
+                      placeholder: Optional[str] = None):
         d = self.p.accepted_ps(i)
         _w(os.path.join(d, "declarations.lean"), declarations)
+        if placeholder is not None:
+            _w(os.path.join(d, "placeholder.lean"), placeholder)
         _w(os.path.join(d, "body.lean"), body)
 
     # -- final / failure --
-    def write_final(self, solution: str, solution_md: str):
+    def write_final_candidate(self, solution: str):
+        path = os.path.join(self.p.tmp, "final_candidate.lean")
+        _w(path, solution)
+        return path
+
+    def write_final(self, solution: str, solution_md: str,
+                    placeholder: Optional[str] = None,
+                    body: Optional[str] = None):
         _w(os.path.join(self.p.final, "solution.lean"), solution)
         _w(os.path.join(self.p.final, "solution.md"), solution_md)
+        if placeholder is not None:
+            _w(os.path.join(self.p.final, "placeholder.lean"), placeholder)
+        if body is not None:
+            _w(os.path.join(self.p.final, "body.lean"), body)
         return os.path.join(self.p.final, "solution.lean")
 
     def write_failure(self, report: str, last_verified: str, last_body: str):
