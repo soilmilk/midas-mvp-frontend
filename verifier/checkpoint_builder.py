@@ -1,11 +1,11 @@
 """
-checkpoint_builder.py — the verification backend for the midas-mvp proof-search loop.
+checkpoint_builder.py — the fresh verification backend for the midas-mvp proof-search loop.
 
 Implements SPEC.md §14's checkpoint model with a fresh `lean` subprocess per check
-(deliberate for the MVP; a warm/persistent backend is an out-of-scope future swap).
+(the warm backend implements the same contract in `midas/warm_backend.py`).
 
     build_checkpoint(prelude, context, accepted_declarations, candidate_declaration,
-                     candidate_body) -> CheckpointResult
+                     candidate_body, placeholder=..., require_closed=...) -> CheckpointResult
 
   DECLARATION CHECK : prelude + context + accepted_declarations + candidate_declaration
                       must compile with NO `sorry`.

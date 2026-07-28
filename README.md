@@ -1,11 +1,20 @@
 # Midas MVP
 
-A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
-Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small proof step) and a
-**translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
-is proved with no `sorry`, or a budget is exhausted. Every step is checked by the Lean compiler
-in accumulated context. If every Lean translation of an informal candidate fails, its exact `NEXT STEP`
-is shown to the reasoner so the next candidate can simplify or reformulate it.
+A **lemma-oriented, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
+Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small English step) and
+a **translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until an
+explicit final action compiles without `sorry`, or a budget is exhausted. Every proposed declaration
+and theorem-body update is checked by Lean in accumulated context.
+
+Midas supports two problem modes:
+
+- **Easy Mode** completes one unfinished theorem.
+- **Hard Mode** keeps one unresolved definition immutable during exploration, then fills that
+  definition and completes the theorem in one atomic final transaction.
+
+The reasoner searches only in English. It never receives Lean source or compiler diagnostics. If
+every Lean translation of an English candidate fails, its exact `NEXT STEP` is shown to the
+reasoner so the next candidate can simplify or reformulate it.
 
 > **Training / modifying it:** the intended way to improve behavior is to improve the two prompt files
 > in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for
@@ -92,12 +101,15 @@ pip install pydantic openai
 ```
 
 
-**7. Testing the install — NO key needed** (proves Lean + Python are wired up correctly).
+**7. Testing the install — NO key needed.**
+
 ```bash
-python3 verifier/run_phase1.py       # must end: PHASE 1 GATE: PASS
-python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
-python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
+python3 tests/run_all.py
 ```
+
+The runner executes every deterministic gate sequentially and makes no model API calls. The
+fresh/warm parity gate runs when the local warm executable and Mathlib `LEAN_PATH` are available;
+otherwise that environment-dependent gate reports an explicit `SKIP`.
 
 **8. Run a real Lean 4 problem** (needs your OpenRouter key).
 Every time you reopen the workspace, run the following commands:
@@ -125,29 +137,65 @@ python3 -m midas.cli status p4_n5_30
 
 ---
 
-## Adding a problem of your own
+## Adding a problem
 
-Create `problems/<id>/` with an `input/` dir and a `config.json`:
+Every problem explicitly or implicitly selects a mode in `config.json`:
 
+```json
+{
+  "problem_mode": "easy"
+}
 ```
+
+`problem_mode` is `"easy"` or `"hard"` and defaults to `"easy"` for old configurations.
+
+Easy Mode layout:
+
+```text
 problems/<id>/
-  input/
-    informal_problem.md     # the natural-language statement
-    context.lean            # definitions the theorem needs — NO imports (prelude supplies them)
-    body_initial.lean       # theorem <name> ... := by\n  sorry   (must end the header in ':= by')
   config.json
-  reference_solution.lean   # OPTIONAL; documents provability (the loop never reads it)
+  input/
+    informal_problem.md
+    context.lean
+    body_initial.lean
+  reference_solution.lean   # optional; the loop never reads it
+```
+
+Hard Mode adds one file:
+
+```text
+problems/<id>/
+  config.json               # contains "problem_mode": "hard"
+  input/
+    informal_problem.md
+    context.lean
+    placeholder.lean
+    body_initial.lean
+  reference_solution.lean   # optional
 ```
 
 Rules that matter:
-- `context.lean` are the definitions/object that the theorem uses. Contains **no imports** (put imports in `lean_prelude`).
-- `body_initial.lean` must contain exactly one theorem whose header ends in **`:= by`** (the loader
-  fails loudly otherwise). That header is stored and enforced **byte-for-byte** on every later body.
-- See problems/p3_imo for an example.
 
-- example for `config.json`:
+- `context.lean` contains the definitions the theorem needs and no imports; put imports in
+  `lean_prelude`.
+- `body_initial.lean` contains exactly one tactic-mode theorem whose header ends in `:= by`.
+  The header is stored and enforced byte-for-byte on every later body.
+- Hard Mode requires `placeholder.lean`; Easy Mode rejects it.
+- The supported placeholder is exactly one top-level tactic-mode definition:
+
+  ```lean4
+  def answer : Nat := by
+    sorry
+  ```
+
+  Its header is preserved byte-for-byte. Imports, namespaces, auxiliary declarations, completed
+  definitions, term-style definitions, and declaration kinds other than `def` are rejected.
+
+Example `config.json`:
+
 ```json
 {
+  "problem_mode": "hard",
   "max_proof_steps": 8,
   "max_informal_candidates_per_proof_step": 3,
   "max_lean_translation_attempts_per_candidate": 3,
@@ -165,8 +213,75 @@ Rules that matter:
   "verifier_backend": "warm"
 }
 ```
-- `lean_prelude` — **full Lean lines**, prepended verbatim (e.g. `"import Mathlib"`, `"set_option maxHeartbeats 0"`).
-- `reasoning_effort` — `minimal | low | medium | high`. **Biggest latency lever**: gpt-5 is a reasoning model (≈1.5 s at `minimal`, ≈6 s at `low`, ≈10–13 s default). `minimal` = zero reasoning tokens (fast but shallow). See `NOTES.md`.
+
+- `lean_prelude` contains full Lean lines, prepended verbatim.
+- `reasoning_effort` is `minimal | low | medium | high`. It is the largest latency lever;
+  `minimal` is fastest but may use no reasoning tokens. See `NOTES.md`.
+
+### Hard Mode protocol and transaction
+
+Every new reasoner action includes non-empty `NEXT STEP` and `PROOF` fields plus an exact
+`IS_FINAL_STEP: True` or `IS_FINAL_STEP: False`.
+
+- Easy Mode never uses an `ANSWER` field.
+- A non-final Hard Mode action forbids `ANSWER`.
+- A final Hard Mode action requires one non-empty English/mathematical `ANSWER`; it is not Lean
+  source and is not persisted as an accepted answer branch.
+
+Every action starts with:
+
+```text
+INTERMEDIATE REASONING:
+...
+
+NEXT STEP:
+...
+
+PROOF:
+...
+
+IS_FINAL_STEP: True | False
+```
+
+A final Hard action uses `IS_FINAL_STEP: True` and appends:
+
+```text
+ANSWER:
+<concrete answer in English or mathematical notation>
+```
+
+Exploration translations contain `NEW DECLARATIONS` and a complete `UPDATED THEOREM BODY`.
+Easy final translations contain `NEW DECLARATIONS` and a complete `FINAL THEOREM BODY`. Hard final
+translations contain `NEW DECLARATIONS`, `FILLED PLACEHOLDER`, and `FINAL THEOREM BODY`, in that
+order. An exploration translation cannot fill the placeholder.
+
+The selected translator schema is exact:
+
+```text
+Exploration:       NEW DECLARATIONS → UPDATED THEOREM BODY
+Easy final:        NEW DECLARATIONS → FINAL THEOREM BODY
+Hard final:        NEW DECLARATIONS → FILLED PLACEHOLDER → FINAL THEOREM BODY
+```
+
+Every section contains one complete `lean4` code fence. The theorem sections contain the entire
+target theorem and preserve its stored header byte-for-byte.
+
+Every Hard Mode source is assembled as:
+
+```text
+prelude
+context
+previously accepted declarations
+candidate declarations
+placeholder
+theorem body
+```
+
+Candidate declarations are compiled in a first pass that excludes the placeholder, so they cannot
+refer to its symbol. Final declarations, the filled placeholder, and the final theorem body are
+verified against one frozen accepted prefix and committed only after the complete independently
+reconstructed file compiles without `sorry`. A failed final proposal commits nothing and uses the
+normal translation-retry and English-decomposition flow.
 
 --- 
 
@@ -206,17 +321,40 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 
 <img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
+Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts store
+`declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
+their proposed `placeholder.lean`. Failed final proposals remain attempt artifacts only.
+
+A successful Hard Mode run writes:
+
+```text
+final/
+  solution.lean
+  solution.md
+  placeholder.lean
+  body.lean
+```
+
+The accepted final proof step also contains its declarations, filled placeholder, and theorem body.
+
 ---
 
 ## Attempt statuses
 
-`pending · parse_error · format_failed · lemma_failed · body_failed · accepted · final_success · final_reconstruction_failed`
+Common statuses are:
 
-- **`parse_error`** — raw model output couldn't be parsed into the two required sections.
-- **`format_failed`** — parsed, but broke a structure rule (sorry in a declaration, header changed, repeated name, >1 theorem).
+`pending · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
+
+- **`parse_error`** — raw model output did not match the selected attempt schema.
+- **`format_failed` / `placeholder_format_failed`** — parsed output broke a structural rule.
 - **`lemma_failed` / `body_failed`** — the declaration / body compile failed.
-- **`accepted`** — both compile, body still has `sorry` (progress).
-- **`final_success`** — body has no `sorry` and the independently reconstructed `final/solution.lean` compiles clean.
+- **`placeholder_fill_failed`** — a Hard final suffix failed in the filled-placeholder region.
+- **`accepted`** — a non-final action passed both checkpoint stages. The theorem body is not
+  required to contain `sorry`; finality comes only from the reasoner's explicit signal.
+- **`final_success`** — the selected final transaction and independently reconstructed
+  `final/solution.lean` compile without `sorry`.
+- **`final_reconstruction_failed` / `hard_full_reconstruction_failed`** — checkpoint verification
+  passed, but the independent full-file gate rejected the final source.
 
 ---
 
@@ -232,13 +370,14 @@ All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<pro
 | command | what it does |
 |---|---|
 | `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree + `state.json`. |
-| `status <problem_id>` | Status, theorem header, stats, and a per-proof-step summary. |
-| `attempts <problem_id> [--step N] [--failed-only]` | Table of every translation attempt and its status; the `declarations?` column shows whether the step introduced a lemma. |
-| `show <problem_id> <step> <cand> <attempt>` | Dump one attempt's reasoning prompt, translator prompt, **raw model output**, parsed `declarations.lean`/`body.lean`, and `compile.json`. |
-| `replay <problem_id> <step> <cand> <attempt>` | **Recompile that one checkpoint via the verifier only — no LLM call.** For debugging a failure without burning API calls. |
+| `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
+| `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
+| `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |
+| `replay <problem_id> <step> <cand> <attempt>` | Recompile one saved transaction with its original attempt kind and configured backend; no LLM call. |
 
 Examples:
 ```bash
+python3 -m midas.cli status hard_problem
 python3 -m midas.cli attempts p2_lemma --failed-only
 python3 -m midas.cli show p3_imo 4 1 1        # proof_step_004 / candidate 1 / attempt 1
 python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
@@ -284,7 +423,7 @@ midas/                      the loop: models, agents, parser, structure, verifie
 verifier/                   checkpoint_builder.py (fresh `lean` per checkpoint) + phase-1 gate
 warm-server/                Lean/Lake warm verifier executable for Mathlib-heavy checks
 problems/                   p1_sanity, p2_lemma, p3_imo (+ toy), each input/ + config.json
-tests/                      offline pipeline + offline loop tests (no API key)
+tests/                      offline gates plus optional real fresh/warm parity (no API key)
 ```
 
 ---
@@ -301,12 +440,3 @@ tests/                      offline pipeline + offline loop tests (no API key)
   the `fresh` backend, a Mathlib checkpoint takes tens of seconds each.
 - The **Metaoptimizer agent itself** (SPEC §20) is out of MVP scope — the loop logs everything it
   would consume; `HANDOFF.md` describes building it.
-
-
-## Hard Mode temporary notes
-
-The Hard Mode Phase 0 baseline was recorded on 2026-07-28 with all three
-commands passing unchanged. Core-only development fixtures are documented in
-[`tests/fixtures/hard_mode/`](tests/fixtures/hard_mode/README.md). These are
-fixture snippets only; production Hard Mode behavior is introduced in later
-phases.

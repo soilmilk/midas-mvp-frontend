@@ -11,8 +11,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from midas.parser import parse_translator_output
-from midas.structure import (extract_header, check_structure, body_contains_sorry,
-                             HeaderError, declared_names)
+from midas.structure import (extract_header, check_structure, HeaderError,
+                             declared_names)
 from midas.verifier_client import VerifierClient, build_compile_json
 from midas.reconstructor import reconstruct
 from midas.models import CheckReport, Diagnostic
@@ -75,7 +75,7 @@ NEW DECLARATIONS:
 theorem key : f A = f B := by rw [A_eq, B_eq]
 ```
 
-UPDATED THEOREM BODY:
+FINAL THEOREM BODY:
 
 ```
 theorem main : f A = f B := by
@@ -201,24 +201,37 @@ row("warm parser preserves diagnostic code", warm_errors[1]["code"] == "lean.tes
 # ---- run the toy through the deterministic spine ----
 accepted_decls = []
 final_status = "running"
-for i, raw in enumerate([STEP1, STEP2, STEP3], start=1):
-    pr = parse_translator_output(raw)
+attempts = [
+    ("exploration", STEP1),
+    ("exploration", STEP2),
+    ("easy_finalization", STEP3),
+]
+for i, (attempt_kind, raw) in enumerate(attempts, start=1):
+    pr = parse_translator_output(raw, attempt_kind)
     assert pr.ok, f"step{i} parse failed: {pr.error}"
     sr = check_structure(pr.declarations, pr.body, header,
                          previous_accepted_names=_names(accepted_decls) if (i > 1) else [])
     if not sr.ok:
         row(f"step{i} structure", False, "; ".join(sr.violations)); continue
-    cp = vc.check(PRELUDE, context, accepted_decls, pr.declarations, pr.body)
+    cp = vc.check(
+        PRELUDE,
+        context,
+        accepted_decls,
+        pr.declarations,
+        pr.body,
+        require_closed=(attempt_kind != "exploration"),
+    )
     if not cp.accepted:
         cj = build_compile_json("lemma_failed" if not cp.declaration_check.passed else "body_failed", sr, cp)
         row(f"step{i} verify", False, f"decl={cp.declaration_check.status} body={cp.body_check.status}")
         continue
-    if body_contains_sorry(pr.body):
+    if attempt_kind == "exploration":
         accepted_decls.append(pr.declarations)
-        row(f"step{i} accept (OPEN)", True,
-            f"decl+body pass, sorry=True, +{','.join(_names([pr.declarations]))}")
+        row(f"step{i} accept (exploration)", True,
+            f"decl+body pass, sorry={cp.contains_sorry}, "
+            f"+{','.join(_names([pr.declarations]))}")
     else:
-        # final step: accept decl, reconstruct, compile independently (§14 hard rule)
+        # Explicit final action: reconstruct and compile independently.
         accepted_decls.append(pr.declarations)
         full = reconstruct(PRELUDE, context, accepted_decls, pr.body)
         final_path = os.path.join(ROOT, "tests", "_final_solution.lean")

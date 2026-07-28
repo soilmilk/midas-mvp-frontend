@@ -2,13 +2,22 @@
 - All the lemmas in NEW DECLARATIONS have to be proved completely - no "sorry" is allowed.
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
 
+## Follow the selected transaction schema exactly
+- Return every requested section once, in the requested order, with one complete Lean code fence.
+- Do not add sections from a different attempt kind.
+- An exploration theorem-body update may remain open. Every region requested for a final
+  transaction must be `sorry`-free.
+- Preserve the target theorem header byte-for-byte and return the complete theorem body, not a diff.
+
 ## Prefer using the new lemmas in the theorem body instead of leaving them unused.
 
 ## NEW DECLARATIONS can also have definitions:
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
 
-## Exception where NEW DECLARATIONS is empty
-- There is an exception in which you can leave `NEW DECLARATIONS` empty: ONLY if the English step is about setting up induction, separating into cases, or setting up contradiction. If that happens, change only the theorem body (induction setup, `rcases`/`by_cases`, `intro`/`obtain`, `by_contra`), and leave the NEW DECLARATIONS section as an empty lean4 code fence.
+## When NEW DECLARATIONS is empty
+- Leave `NEW DECLARATIONS` as an empty Lean code fence when no independent declaration is
+  appropriate. Common examples are setting up induction, separating into cases, setting up
+  contradiction, or making a final theorem-body-only change.
 
 ## Lean 4 core nuances
 - **Truncated `Nat` subtraction.** For `a b : Nat`, `a - b = 0` when `a < b`. If a step relies on

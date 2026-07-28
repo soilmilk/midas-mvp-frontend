@@ -1,8 +1,8 @@
-# Hard Mode Phase 0 fixtures
+# Hard Mode fixtures
 
 These Core-only snippets establish the source shapes and expected Lean verdicts
-for Hard Mode development. They are test data, not a complete problem directory;
-production Hard Mode loading and verification begin in Phase 1.
+for Hard Mode regression and backend-parity tests. They are test data, not a
+complete problem directory.
 
 The authoritative source order is:
 
