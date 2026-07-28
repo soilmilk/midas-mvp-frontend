@@ -7,14 +7,14 @@ import os, re, time
 from typing import List, Optional
 
 from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
-                     RunStats, CompileJson, CheckReport, Diagnostic, attempt_kind_for)
+                     RunStats, CheckReport, Diagnostic, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
 from .parser import parse_reasoning_action, parse_translator_output
 from .structure import (check_filled_placeholder, check_structure,
                         body_contains_sorry, declared_names)
-from .verifier_client import VerifierClient, make_verifier, build_compile_json
-from .reconstructor import reconstruct, reconstruct_hard, render_source
+from .verifier_client import make_verifier, build_compile_json
+from .reconstructor import RenderedSource, SourceRegion, render_source
 from .artifacts import Paths, LeanArtifactLogger, StateManager
 
 CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "considerations")
@@ -46,14 +46,16 @@ def _diagnostics(errors) -> List[Diagnostic]:
     return out
 
 
-def _errors_in_fragment(errors: List[Diagnostic], source: str, fragment: str) -> bool:
-    first, last = _line_range(source, fragment)
-    return first > 0 and any(first <= error.line <= last for error in errors)
-
-
-def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
-                      declarations: str, body: str, warm: bool,
-                      placeholder: str = "") -> str:
+def _submitted_rendered_source(
+    prelude: List[str],
+    context: str,
+    accepted_decls: List[str],
+    declarations: str,
+    body: str,
+    warm: bool,
+    placeholder: str = "",
+    include_suffix: bool = True,
+) -> RenderedSource:
     """Reproduce the source layout used by the selected verifier for location mapping."""
     submitted_prelude = ([line for line in (prelude or [])
                           if not line.strip().startswith("import ")]
@@ -63,77 +65,137 @@ def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str
         context,
         accepted_decls,
         candidate_declarations=declarations,
-        placeholder=placeholder,
-        theorem_body=body,
+        placeholder=placeholder if include_suffix else "",
+        theorem_body=body if include_suffix else "",
+    )
+
+
+def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
+                      declarations: str, body: str, warm: bool,
+                      placeholder: str = "") -> str:
+    """Compatibility wrapper retained for existing diagnostic tests."""
+    return _submitted_rendered_source(
+        prelude, context, accepted_decls, declarations, body, warm, placeholder
     ).text
 
 
-def _line_range(source: str, fragment: str, start_at: int = 0) -> tuple[int, int]:
-    if not fragment.strip():
-        return (0, -1)
-    pos = source.find(fragment.rstrip(), start_at)
-    if pos < 0:
-        return (0, -1)
-    first = source.count("\n", 0, pos) + 1
-    return first, first + fragment.rstrip().count("\n")
+def _effective_location(error: Diagnostic) -> tuple[int, int]:
+    line, col = error.line, error.col
+    if line <= 0:
+        embedded = re.search(r"<req>:(\d+):(\d+):", error.message)
+        if embedded:
+            line, col = int(embedded.group(1)), int(embedded.group(2))
+    return line, col
 
 
-def _render_repair_diagnostics(errors: List[Diagnostic], source: str, declarations: str,
-                               body: str, placeholder: str = "",
-                               attempt_kind: str = "exploration") -> str:
-    """Render every diagnostic with its owning region and a numbered nearby excerpt."""
-    decl_range = _line_range(source, declarations)
-    after_declarations = (
-        source.find(declarations.rstrip()) + len(declarations.rstrip())
-        if declarations.strip() else 0
-    )
-    placeholder_range = _line_range(source, placeholder, after_declarations)
-    after_placeholder = (
-        source.find(placeholder.rstrip(), after_declarations) + len(placeholder.rstrip())
-        if placeholder.strip() else after_declarations
-    )
-    body_range = _line_range(source, body, after_placeholder)
+def _region_label(region_name: str, attempt_kind: str) -> str:
     body_heading = (
         "UPDATED THEOREM BODY"
         if attempt_kind == "exploration"
         else "FINAL THEOREM BODY"
     )
-    lines = source.splitlines()
-    rendered = []
+    if region_name == "candidate_declarations":
+        return "rejected NEW DECLARATIONS"
+    if region_name == "placeholder":
+        return (
+            "rejected FILLED PLACEHOLDER"
+            if attempt_kind == "hard_finalization"
+            else "unresolved PLACEHOLDER"
+        )
+    if region_name == "theorem_body":
+        return f"rejected {body_heading}"
+    return "prelude, context, or previously accepted code"
+
+
+def _region_for_line(rendered: RenderedSource, line: int,
+                     attempt_kind: str) -> str:
+    for region in rendered.regions:
+        if region.start_line <= line <= region.end_line:
+            return _region_label(region.name, attempt_kind)
+    return "prelude, context, or previously accepted code"
+
+
+def _numbered_excerpt(rendered: RenderedSource, line: int, col: int) -> str:
+    lines = rendered.text.splitlines()
+    if line <= 0 or not lines:
+        return ""
+    lo, hi = max(1, line - 3), min(len(lines), line + 3)
+    width = len(str(hi))
+    excerpt = [f"{n:>{width}} | {lines[n - 1]}" for n in range(lo, hi + 1)]
+    if line <= len(lines):
+        excerpt.append(" " * width + " | " + " " * max(0, col) + "^")
+    return "\n".join(excerpt)
+
+
+def _annotate_report(report: CheckReport, rendered: RenderedSource,
+                     attempt_kind: str) -> None:
+    """Persist the exact source region and excerpt used in repair prompts."""
+    for error in report.errors:
+        line, col = _effective_location(error)
+        error.source_region = _region_for_line(rendered, line, attempt_kind)
+        error.nearby_code = _numbered_excerpt(rendered, line, col)
+
+
+def _errors_in_region(errors: List[Diagnostic], rendered: RenderedSource,
+                      region_name: str) -> bool:
+    targets = [region for region in rendered.regions if region.name == region_name]
+    return any(
+        any(region.start_line <= _effective_location(error)[0] <= region.end_line
+            for region in targets)
+        for error in errors
+    )
+
+
+def _render_repair_diagnostics(errors: List[Diagnostic],
+                               rendered_source,
+                               declarations: str = "",
+                               body: str = "",
+                               placeholder: str = "",
+                               attempt_kind: str = "exploration") -> str:
+    """Render every diagnostic from the verifier's authoritative source spans."""
+    if isinstance(rendered_source, str):
+        # Compatibility for older direct callers. Production paths pass the
+        # RenderedSource produced by the verifier's shared renderer.
+        regions = []
+        search_from = 0
+        for name, fragment in (
+            ("candidate_declarations", declarations),
+            ("placeholder", placeholder),
+            ("theorem_body", body),
+        ):
+            if not fragment.strip():
+                continue
+            pos = rendered_source.find(fragment.rstrip(), search_from)
+            if pos < 0:
+                continue
+            start = rendered_source.count("\n", 0, pos) + 1
+            regions.append(SourceRegion(
+                name, start, start + fragment.rstrip().count("\n")
+            ))
+            search_from = pos + len(fragment.rstrip())
+        rendered_source = RenderedSource(rendered_source, regions)
+
+    items = []
     for index, error in enumerate(errors, 1):
-        line, col = error.line, error.col
-        if line <= 0:
-            embedded = re.search(r"<req>:(\d+):(\d+):", error.message)
-            if embedded:
-                line, col = int(embedded.group(1)), int(embedded.group(2))
-        if decl_range[0] <= line <= decl_range[1]:
-            region = "rejected NEW DECLARATIONS"
-        elif placeholder_range[0] <= line <= placeholder_range[1]:
-            region = (
-                "rejected FILLED PLACEHOLDER"
-                if attempt_kind == "hard_finalization"
-                else "unresolved PLACEHOLDER"
-            )
-        elif body_range[0] <= line <= body_range[1]:
-            region = f"rejected {body_heading}"
-        else:
-            region = "prelude, context, or previously accepted code"
+        line, col = _effective_location(error)
+        region = error.source_region or _region_for_line(
+            rendered_source, line, attempt_kind
+        )
         code = f" ({error.code})" if error.code else ""
         item = [f"#### Error {index}",
                 f"- Diagnostic: `{error.file}:{line}:{col}` {error.severity}{code}",
                 f"- Source region: **{region}**",
                 f"- Message: {error.message}"]
-        if line > 0 and lines:
-            lo, hi = max(1, line - 3), min(len(lines), line + 3)
-            width = len(str(hi))
-            excerpt = [f"{n:>{width}} | {lines[n - 1]}" for n in range(lo, hi + 1)]
-            if line <= len(lines):
-                excerpt.append(" " * width + " | " + " " * max(0, col) + "^")
-            item.extend(["- Nearby submitted Lean code:", "```lean4", *excerpt, "```"])
+        excerpt = error.nearby_code or _numbered_excerpt(
+            rendered_source, line, col
+        )
+        if excerpt:
+            item.extend(["- Nearby submitted Lean code:", "```lean4",
+                         excerpt, "```"])
         else:
             item.append("- Nearby submitted Lean code: unavailable because the verifier supplied no line number.")
-        rendered.append("\n".join(item))
-    return "\n\n".join(rendered) if rendered else "No structured diagnostics were returned."
+        items.append("\n".join(item))
+    return "\n\n".join(items) if items else "No structured diagnostics were returned."
 
 
 class LimitController:
@@ -270,7 +332,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     while state.status == "running":
         lim = limits.exceeded(state)
         if lim:
-            failures.write(state, lim, _env_text(prelude, prob.context, accepted_decls),
+            failures.write(state, lim, _env_text(
+                               prelude, prob.context, accepted_decls,
+                               placeholder_initial_source
+                               if problem_mode == "hard" else ""),
                            latest_body, last_error, category_counts)
             return finish()
 
@@ -285,7 +350,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             ic = InformalCandidate(informal_candidate_index=j)
             ps.informal_candidates.append(ic)
             if _now() >= deadline:
-                failures.write(state, "max_runtime_seconds", _env_text(prelude, prob.context, accepted_decls),
+                failures.write(state, "max_runtime_seconds", _env_text(
+                                   prelude, prob.context, accepted_decls,
+                                   placeholder_initial_source
+                                   if problem_mode == "hard" else ""),
                                latest_body, last_error, category_counts)
                 return finish()
             try:
@@ -330,7 +398,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
                 lim = limits.exceeded(state)
                 if lim:
-                    failures.write(state, lim, _env_text(prelude, prob.context, accepted_decls),
+                    failures.write(state, lim, _env_text(
+                                       prelude, prob.context, accepted_decls,
+                                       placeholder_initial_source
+                                       if problem_mode == "hard" else ""),
                                    latest_body, last_error, category_counts)
                     return finish()
 
@@ -456,8 +527,18 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 )
                 state.stats.total_lean_compiles += 1
                 if not cp.declaration_check.passed:
+                    submitted = _submitted_rendered_source(
+                        prelude, prob.context, accepted_decls,
+                        pr.declarations, pr.body,
+                        prob.config.verifier_backend == "warm",
+                        candidate_placeholder,
+                        include_suffix=False,
+                    )
                     cj = build_compile_json(
                         "lemma_failed", sr, cp, attempt_kind=attempt_kind
+                    )
+                    _annotate_report(
+                        cj.declaration_check, submitted, attempt_kind
                     )
                     _log_attempt(
                         logger, la, paths, i, j, k, t,
@@ -467,10 +548,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.status = "lemma_failed"; bump("new_declaration_does_not_compile")
                     last_error = cp.declaration_raw
                     compiler_feedback = "Declaration failed to compile:\n" + _feedback_from_errors(cj.declaration_check.errors)
-                    submitted = _submitted_source(prelude, prob.context, accepted_decls,
-                                                  pr.declarations, pr.body,
-                                                  prob.config.verifier_backend == "warm",
-                                                  candidate_placeholder)
                     repair_context = TranslationRepairContext(
                         failed_check="declaration_check", raw_output=t.text,
                         declarations=pr.declarations, body=pr.body,
@@ -478,30 +555,31 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         attempt_kind=attempt_kind,
                         diagnostics=_render_repair_diagnostics(
                             cj.declaration_check.errors, submitted,
-                            pr.declarations, pr.body, candidate_placeholder,
-                            attempt_kind))
+                            attempt_kind=attempt_kind))
                     statemgr.save(state); continue
 
                 state.stats.total_lean_compiles += 1
                 if not cp.body_check.passed:
+                    submitted = _submitted_rendered_source(
+                        prelude, prob.context, accepted_decls,
+                        pr.declarations, pr.body,
+                        prob.config.verifier_backend == "warm",
+                        candidate_placeholder,
+                    )
                     status = (
                         "placeholder_fill_failed"
                         if attempt_kind == "hard_finalization"
-                        and _errors_in_fragment(
+                        and _errors_in_region(
                             _diagnostics(cp.body_check.errors),
-                            _submitted_source(
-                                prelude, prob.context, accepted_decls,
-                                pr.declarations, pr.body,
-                                prob.config.verifier_backend == "warm",
-                                candidate_placeholder,
-                            ),
-                            candidate_placeholder,
+                            submitted,
+                            "placeholder",
                         )
                         else "body_failed"
                     )
                     cj = build_compile_json(
                         status, sr, cp, attempt_kind=attempt_kind
                     )
+                    _annotate_report(cj.body_check, submitted, attempt_kind)
                     _log_attempt(
                         logger, la, paths, i, j, k, t,
                         pr.declarations, pr.body, cj,
@@ -516,10 +594,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         if attempt_kind != "exploration"
                         else "Body failed to compile:\n"
                     ) + _feedback_from_errors(cj.body_check.errors)
-                    submitted = _submitted_source(prelude, prob.context, accepted_decls,
-                                                  pr.declarations, pr.body,
-                                                  prob.config.verifier_backend == "warm",
-                                                  candidate_placeholder)
                     repair_context = TranslationRepairContext(
                         failed_check="body_check", raw_output=t.text,
                         declarations=pr.declarations, body=pr.body,
@@ -527,8 +601,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         attempt_kind=attempt_kind,
                         diagnostics=_render_repair_diagnostics(
                             cj.body_check.errors, submitted,
-                            pr.declarations, pr.body, candidate_placeholder,
-                            attempt_kind))
+                            attempt_kind=attempt_kind))
                     statemgr.save(state); continue
 
                 # ---- both checks passed ----
@@ -552,25 +625,30 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 else:
                     # Final proposals remain non-authoritative until this exact
                     # reconstruction compiles independently without `sorry`.
-                    if attempt_kind == "hard_finalization":
-                        full = reconstruct_hard(
-                            prelude,
-                            prob.context,
-                            accepted_decls + [pr.declarations],
-                            pr.placeholder or "",
-                            pr.body,
-                        )
-                    else:
-                        full = reconstruct(
-                            prelude,
-                            prob.context,
-                            accepted_decls + [pr.declarations],
-                            pr.body,
-                        )
+                    final_rendered = render_source(
+                        prelude,
+                        prob.context,
+                        accepted_decls,
+                        candidate_declarations=pr.declarations,
+                        placeholder=(
+                            pr.placeholder or ""
+                            if attempt_kind == "hard_finalization"
+                            else ""
+                        ),
+                        theorem_body=pr.body,
+                    )
+                    full = final_rendered.text
                     candidate_path = logger.write_final_candidate(full)
-                    fr = verifier.compile_full_file(candidate_path)
+                    try:
+                        fr = verifier.compile_full_file(candidate_path)
+                    finally:
+                        try:
+                            os.unlink(candidate_path)
+                        except OSError:
+                            pass
                     state.stats.total_lean_compiles += 1
                     fc = _final_report(fr)
+                    _annotate_report(fc, final_rendered, attempt_kind)
                     if fr.ok and not fr.contains_sorry:
                         cj = build_compile_json(
                             "final_success", sr, cp, fc,
@@ -616,17 +694,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         la.status = status; bump(status)
                         last_error = fr.raw
                         compiler_feedback = "Reconstructed solution failed to compile:\n" + fr.raw[:800]
-                        final_errors = [
-                            Diagnostic(
-                                file=e.file,
-                                line=e.line,
-                                col=e.col,
-                                severity=e.severity,
-                                code=e.code,
-                                message=e.message,
-                            )
-                            for e in fr.errors
-                        ]
                         repair_context = TranslationRepairContext(
                             failed_check="final_check",
                             raw_output=t.text,
@@ -634,8 +701,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                             placeholder=pr.placeholder or "",
                             body=pr.body,
                             diagnostics=_render_repair_diagnostics(
-                                final_errors, full, pr.declarations, pr.body,
-                                pr.placeholder or "", attempt_kind,
+                                fc.errors, final_rendered,
+                                attempt_kind=attempt_kind,
                             ),
                             attempt_kind=attempt_kind,
                         )
@@ -658,7 +725,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             return finish()
         if not step_accepted:
             ps.status = "failed"
-            failures.write(state, "proof_step_failed", _env_text(prelude, prob.context, accepted_decls),
+            failures.write(state, "proof_step_failed", _env_text(
+                               prelude, prob.context, accepted_decls,
+                               placeholder_initial_source
+                               if problem_mode == "hard" else ""),
                            latest_body, last_error, category_counts)
             return finish()
         statemgr.save(state)
@@ -694,8 +764,14 @@ def _check_errs(vr):
                               code=e.get("code", ""), message=e.get("message", "")))
     return out
 
-def _env_text(prelude, context, accepted_decls):
-    return reconstruct(prelude, context, accepted_decls, "-- (theorem body omitted)")
+def _env_text(prelude, context, accepted_decls, placeholder=""):
+    return render_source(
+        prelude,
+        context,
+        accepted_decls,
+        placeholder=placeholder,
+        theorem_body="-- (theorem body omitted)",
+    ).text
 
 def _solution_md(prob, state, status=None):
     return (

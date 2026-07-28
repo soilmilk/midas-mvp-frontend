@@ -52,6 +52,7 @@ class Diagnostic(BaseModel):
     severity: str = "error"          # error | warning
     code: str = ""                   # Lean 4.31 diagnostic code, e.g. lean.unknownIdentifier
     message: str = ""
+    source_region: str = ""
     nearby_code: str = ""
 
 
