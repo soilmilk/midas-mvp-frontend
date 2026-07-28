@@ -174,6 +174,15 @@ def check_structure(declarations: str, body: str, header: str,
                     previous_accepted_names: List[str]) -> StructureResult:
     v: List[str] = []
 
+    for region_name, source in (
+        ("declarations", declarations or ""),
+        ("body", body or ""),
+    ):
+        forbidden = _FORBIDDEN_COMMAND.search(_mask_comments(source))
+        if forbidden:
+            command = forbidden.group(0).strip().split()[0]
+            v.append(f"{region_name} contains forbidden top-level command: {command}")
+
     # §12: declarations must not contain sorry
     if _SORRY.search(declarations or ""):
         v.append("declarations contain `sorry`")

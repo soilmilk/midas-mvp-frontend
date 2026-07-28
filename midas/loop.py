@@ -10,7 +10,7 @@ from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslatio
                      RunStats, CompileJson, CheckReport, Diagnostic)
 from .problem import load_problem, InputValidator, Problem
 from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
-from .parser import parse_translator_output
+from .parser import parse_reasoning_action, parse_translator_output
 from .structure import (extract_header, check_structure, body_contains_sorry, declared_names)
 from .verifier_client import VerifierClient, make_verifier, build_compile_json
 from .reconstructor import reconstruct, render_source
@@ -23,30 +23,9 @@ def _read(p): return open(p).read()
 def _now(): return time.time()
 
 
-def _extract_informal(text: str) -> Optional[str]:
-    """Return the candidate beginning at NEXT STEP, or None when it is absent."""
-    text = text.strip()
-    if not text:
-        return ""
-    m = re.search(r"(?im)^\s*NEXT STEP:\s*", text)
-    return text[m.start():] if m else None
-
-
-def _extract_next_step(informal: str) -> str:
-    """Return the complete proposition, excluding its proof, for reasoning retries."""
-    m = re.search(r"(?is)NEXT STEP:\s*(.+?)(?:\n\s*PROOF:|\Z)", informal)
-    return m.group(1).strip() if m else ""
-
-
 def _feedback_from_errors(errs: List[Diagnostic]) -> str:
     return "\n".join(f"{e.file}:{e.line}:{e.col}: {e.severity}"
                      f"{'('+e.code+')' if e.code else ''}: {e.message}" for e in errs) or "(no detail)"
-
-
-def _accepted_summary(decls: List[str]) -> str:
-    if not decls:
-        return "(none)"
-    return "\n\n".join(decls)
 
 
 def _submitted_source(prelude: List[str], context: str, accepted_decls: List[str],
@@ -253,8 +232,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                latest_body, last_error, category_counts)
                 return finish()
             try:
-                r = reasoning.propose(prob.informal_problem, informal_progress, state.current_knowledge,
-                                      prob.context, _accepted_summary(accepted_decls), latest_body,
+                r = reasoning.propose(prob.informal_problem, informal_progress,
+                                      problem_mode=prob.config.problem_mode,
                                       failure_feedback=reasoning_feedback,
                                       failed_next_step=failed_next_step, attempt_index=j - 1,
                                       timeout=call_timeout())
@@ -266,35 +245,25 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 failed_next_step = ""
                 statemgr.save(state); continue
             state.stats.total_llm_calls += 1
-            informal_candidate = _extract_informal(r.text)
+            action = parse_reasoning_action(r.text, prob.config.problem_mode)
             logger.write_reasoning(i, j, r.prompt, r.text)
             ic.reasoning_prompt_path = os.path.join(paths.ic(i, j), "reasoning_prompt.md")
             ic.informal_step_path = os.path.join(paths.ic(i, j), "informal_step.md")
 
-            if informal_candidate is None:
-                last_error = "reasoning output was missing a NEXT STEP section"
-                bump("missing_next_step")
+            if not action.ok:
+                last_error = f"invalid reasoner action: {action.error}"
+                bump("invalid_reasoner_action")
                 ic.status = "abandoned"
                 reasoning_feedback = (
-                    "The previous reasoning output was missing NEXT STEP. Emit one non-empty "
-                    "NEXT STEP with its PROOF."
+                    "The previous response was not a valid action: "
+                    f"{action.error}. Return one action with non-empty NEXT STEP and PROOF, "
+                    "and an exact IS_FINAL_STEP Boolean."
                 )
                 failed_next_step = ""
                 statemgr.save(state)
                 continue
 
-            if not informal_candidate:
-                last_error = "reasoning output was empty"
-                bump("empty_informal_output")
-                ic.status = "abandoned"
-                reasoning_feedback = (
-                    "The previous reasoning output was empty. Emit one non-empty NEXT STEP "
-                    "with its PROOF."
-                )
-                failed_next_step = ""
-                statemgr.save(state)
-                continue
-
+            informal_candidate = action.informal_step
             candidate_accepted = False
             compiler_feedback = ""
             repair_context = None
@@ -388,7 +357,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     logger.copy_accepted(i, pr.declarations, pr.body)
                     accepted_decls.append(pr.declarations); latest_body = pr.body
                     state.stats.accepted_proof_steps += 1
-                    knowledge = _extract_next_step(informal_candidate)
+                    knowledge = action.next_step
                     state.current_knowledge.append(knowledge)
                     informal_progress += f"\n- {knowledge}"
                     candidate_accepted = step_accepted = True
@@ -418,7 +387,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             if candidate_accepted:
                 break
             ic.status = "abandoned"
-            failed_next_step = _extract_next_step(informal_candidate)
+            failed_next_step = action.next_step
             reasoning_feedback = (
                 "The step above could not be translated after all Lean attempts. Propose a smaller, "
                 "more direct, or differently formulated step. Do not repeat it unchanged."

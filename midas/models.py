@@ -7,6 +7,22 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+AttemptKind = Literal[
+    "exploration",
+    "easy_finalization",
+    "hard_finalization",
+]
+
+
+def attempt_kind_for(problem_mode: str, is_final_step: bool) -> AttemptKind:
+    """Derive the translator protocol solely from mode and the reasoner signal."""
+    if problem_mode not in ("easy", "hard"):
+        raise ValueError(f"unsupported problem mode: {problem_mode!r}")
+    if not is_final_step:
+        return "exploration"
+    return "hard_finalization" if problem_mode == "hard" else "easy_finalization"
+
+
 # ---------------- config (§2) ----------------
 class Config(BaseModel):
     problem_mode: Literal["easy", "hard"] = "easy"

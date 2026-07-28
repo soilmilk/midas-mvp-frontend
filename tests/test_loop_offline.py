@@ -8,7 +8,8 @@ Verifies the §6 artifact tree, state.json, and status transitions.
 import os, sys, shutil, json
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from midas.loop import run_problem, _extract_informal, _extract_next_step
+from midas.loop import run_problem
+from midas.parser import parse_reasoning_action
 from midas.artifacts import StateManager
 
 PROB = os.path.join(ROOT, "problems", "toy")
@@ -20,10 +21,10 @@ def T(decls, body):
 
 reasoning = [
     "",                                                                            # candidate1: empty reasoning output
-    "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.",
-    "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.",
-    "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.",
-    "NEXT STEP:\nCombine to finish.\n\nPROOF:\nRewrite with A=5 and B=5.",
+    "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.\n\nIS_FINAL_STEP: False",
+    "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
+    "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
+    "NEXT STEP:\nCombine to finish.\n\nPROOF:\nRewrite with A=5 and B=5.\n\nIS_FINAL_STEP: True",
 ]
 translation = [
     T("theorem broken : A = 5 := by exact missing_identifier",
@@ -56,10 +57,14 @@ Second line of the proposition.
 
 PROOF:
 The proof.
+
+IS_FINAL_STEP: False
 """
-checks.append(("missing NEXT STEP is rejected", _extract_informal("only reasoning") is None))
+checks.append(("missing NEXT STEP is rejected",
+               not parse_reasoning_action("only reasoning", "easy").ok))
+multiline_action = parse_reasoning_action(multiline_candidate, "easy")
 checks.append(("multiline NEXT STEP is retained",
-               _extract_next_step(_extract_informal(multiline_candidate) or "") ==
+               multiline_action.ok and multiline_action.next_step ==
                "First line of the proposition.\nSecond line of the proposition."))
 # §6 layout: step1 candidate1 is empty, candidate2 is exhausted, candidate3 is accepted.
 candidate1_dir = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_001")

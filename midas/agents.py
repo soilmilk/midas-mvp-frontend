@@ -14,7 +14,8 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
-from .reconstructor import reconstruct
+from .models import AttemptKind
+from .reconstructor import render_source
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
@@ -48,6 +49,8 @@ class TranslationRepairContext:
     declarations: str
     body: str
     diagnostics: str
+    attempt_kind: AttemptKind = "exploration"
+    placeholder: str = ""
 
 
 def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None,
@@ -74,9 +77,17 @@ class ReasoningAgent:
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
 
-    def build_prompt(self, informal_problem: str, informal_progress: str, knowledge: List[str],
-                     context_summary: str, accepted_decls_summary: str, current_body: str,
-                     failure_feedback: str = "", failed_next_step: str = "") -> str:
+    def build_prompt(
+        self,
+        informal_problem: str,
+        informal_progress: str,
+        *,
+        problem_mode: str,
+        failure_feedback: str = "",
+        failed_next_step: str = "",
+    ) -> str:
+        if problem_mode not in ("easy", "hard"):
+            raise ValueError(f"unsupported problem mode: {problem_mode!r}")
         parts = [
             (
                 "You are solving a hard math problem.\n\n"
@@ -85,7 +96,6 @@ class ReasoningAgent:
             ),
             "\n## Problem statement:\n" + informal_problem,
             "\n## Current progress (Assume everything in this section has been already proved)\n" + (informal_progress or "(none yet)"),
-        #   "\n## Current knowledge: \n" + ("\n".join(f"- {k}" for k in knowledge) or "(none)"),
         ]
         if failed_next_step:
             parts.append("\n## Previous step that could not be translated to Lean\n\n" +
@@ -93,6 +103,44 @@ class ReasoningAgent:
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
         parts.append("\n## Considerations\n" + self.considerations)
+        if problem_mode == "easy":
+            parts.append(
+                "\n## Required action format\n\n"
+                "Return exactly one action using these fields in this order:\n\n"
+                "INTERMEDIATE REASONING:\n"
+                "<English reasoning>\n\n"
+                "NEXT STEP:\n"
+                "<one non-empty English proof step>\n\n"
+                "PROOF:\n"
+                "<a non-empty English proof of that step>\n\n"
+                "IS_FINAL_STEP: True | False\n\n"
+                "Use `True` exactly when this step completes the theorem; otherwise use "
+                "`False`."
+            )
+        else:
+            parts.append(
+                "\n## Required action format\n\n"
+                "For a non-final action, return exactly:\n\n"
+                "INTERMEDIATE REASONING:\n"
+                "<English reasoning>\n\n"
+                "NEXT STEP:\n"
+                "<one non-empty English proof step>\n\n"
+                "PROOF:\n"
+                "<a non-empty English proof of that step>\n\n"
+                "IS_FINAL_STEP: False\n\n"
+                "For a final action, return exactly:\n\n"
+                "INTERMEDIATE REASONING:\n"
+                "<English reasoning>\n\n"
+                "NEXT STEP:\n"
+                "<one non-empty English proof step>\n\n"
+                "PROOF:\n"
+                "<a non-empty English proof of that step>\n\n"
+                "IS_FINAL_STEP: True\n\n"
+                "ANSWER:\n"
+                "<the concrete mathematical answer in English or mathematical notation>\n\n"
+                "ANSWER is required and non-empty exactly for a final action. It is "
+                "forbidden for a non-final action and must not contain Lean source."
+            )
         return "\n".join(parts)
 
     def propose(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
@@ -113,47 +161,100 @@ class TranslationAgent:
         self.offline = offline_responses
         self.max_tokens = max_tokens
 
-    def build_prompt(self, header: str, informal_problem: str, prelude: List[str], context: str,
-                     accepted_decls: List[str], current_body: str,
-                     informal_candidate: str, compiler_feedback: str = "",
-                     repair_context: Optional[TranslationRepairContext] = None) -> str:
-        current_file = reconstruct(prelude, context, accepted_decls,
-                                   "" + (current_body or "").strip())
+    def build_prompt(
+        self,
+        header: str,
+        informal_problem: str,
+        prelude: List[str],
+        context: str,
+        accepted_decls: List[str],
+        current_body: str,
+        informal_candidate: str,
+        compiler_feedback: str = "",
+        repair_context: Optional[TranslationRepairContext] = None,
+        *,
+        attempt_kind: AttemptKind = "exploration",
+        placeholder_header: Optional[str] = None,
+        placeholder_initial_source: Optional[str] = None,
+        answer: Optional[str] = None,
+    ) -> str:
+        if attempt_kind not in (
+            "exploration", "easy_finalization", "hard_finalization"
+        ):
+            raise ValueError(f"unsupported attempt kind: {attempt_kind!r}")
+        if attempt_kind == "hard_finalization":
+            if not placeholder_header or not placeholder_initial_source or not answer:
+                raise ValueError(
+                    "Hard finalization requires the placeholder header, original "
+                    "placeholder, and English answer"
+                )
+        current_file = render_source(
+            prelude,
+            context,
+            accepted_decls,
+            placeholder=placeholder_initial_source or "",
+            theorem_body=(current_body or "").strip(),
+        ).text
+
+        if attempt_kind == "exploration":
+            body_heading = "UPDATED THEOREM BODY"
+            output_fields = (
+                "NEW DECLARATIONS and complete UPDATED THEOREM BODY"
+            )
+            body_example = (
+                f"{header}\n"
+                "  <updated proof; it may contain `sorry`>"
+            )
+        else:
+            body_heading = "FINAL THEOREM BODY"
+            output_fields = (
+                "NEW DECLARATIONS and complete FINAL THEOREM BODY"
+                if attempt_kind == "easy_finalization"
+                else (
+                    "NEW DECLARATIONS, complete FILLED PLACEHOLDER, and complete "
+                    "FINAL THEOREM BODY"
+                )
+            )
+            body_example = f"{header}\n  <complete proof with no `sorry`>"
+
+        schema = (
+            "INTERMEDIATE REASONING:\n"
+            "<reason about the translation>\n\n"
+            "PLAN:\n"
+            "<state the declarations and theorem-body changes>\n\n"
+            "NEW DECLARATIONS:\n"
+            "```lean4\n"
+            "<complete declarations, or an empty fence>\n"
+            "```\n\n"
+        )
+        if attempt_kind == "hard_finalization":
+            schema += (
+                "FILLED PLACEHOLDER:\n"
+                "```lean4\n"
+                f"{placeholder_header}\n"
+                "  <complete definition body with no `sorry`>\n"
+                "```\n\n"
+            )
+        schema += (
+            f"{body_heading}:\n"
+            "```lean4\n"
+            f"{body_example}\n"
+            "```"
+        )
+
         parts = [
             (
                 "You are part of a system that converts an English mathematical proof into a Lean 4 proof.\n\n"
                 "The English proof is given one step at a time. You will be given the next step, and your task is to update the "
                 "current Lean 4 proof state so that it reflects the step.\n\n"
-                "You may do this by:\n"
-                "1. adding new Lean lemmas or definitions, and/or\n"
-                "2. replacing the current theorem body with an updated theorem body.\n\n"
-                "Your task is to do the following:\n"
-                "- Reason about the current Lean 4 file below, along with the next English "
-                "step, and what steps can be done to translate the next English step to "
-                "Lean 4, while following translation structure of adding new lemmas and "
-                "updating the theorem body.\n"
+                f"Return the complete {output_fields}.\n\n"
                 "- Before writing Lean code, output a PLAN that states which lemmas or "
-                "definitions you will add, how you will prove them, and how you will change "
+                "definitions you will propose, how you will prove them, and how you will change "
                 "the theorem body to use them. If no new declaration is appropriate, say so "
                 "and explain the planned theorem-body change.\n"
-                "- Output your new lemmas in a section called NEW DECLARATIONS. These "
-                "lemmas will be added to the Lean 4 file and can depend on previous lemmas.\n"
-                "- Output the updated theorem body in a section called UPDATED THEOREM "
-                "BODY. Keep the statement exactly the same - only the proof can be changed.\n\n"
-                "Follow this structure for the output:\n\n"
-                "INTERMEDIATE REASONING:\n"
-                "<intermediate reasoning - assess the current Lean 4 file and next English "
-                "step, and reason about how to translate to Lean 4>\n\n"
-                "PLAN:\n"
-                "<state which lemmas or definitions you will propose, how you will prove "
-                "them, and how you will change the theorem body>\n\n"
-                "NEW DECLARATIONS:\n"
-                "<New lemmas along with their proofs, inside a Lean 4 code fence>\n\n"
-                "UPDATED THEOREM BODY:\n"
-                "```lean4\n"
-                f"{header}\n"
-                "  <Updated theorem proof, it may use the new lemmas and objects in NEW DECLARATIONS, and can use 'sorry' statements>\n"
-                "```"
+                "- Keep the theorem statement byte-for-byte unchanged.\n"
+                "- NEW DECLARATIONS must be complete and contain no `sorry`.\n\n"
+                "Follow this exact section schema:\n\n" + schema
             ),
             "\n## Problem statement in English:\n" + informal_problem,
             "\n\n## Current Lean 4 file\n```lean4\n" + current_file + "```",
@@ -165,7 +266,35 @@ class TranslationAgent:
             ),
             "\n## English step to translate (with its proof)\n" + informal_candidate,
         ]
+        if attempt_kind == "exploration" and placeholder_initial_source:
+            parts.append(
+                "\n## Hard Mode exploration constraint\n\n"
+                "The unresolved placeholder shown in the current file is immutable. Do "
+                "not reproduce, replace, or add a FILLED PLACEHOLDER section. New "
+                "declarations are inserted before it, and the updated theorem remains "
+                "after it."
+            )
+        elif attempt_kind == "easy_finalization":
+            parts.append(
+                "\n## Finalization constraint\n\n"
+                "Every proposed declaration and the FINAL THEOREM BODY must be "
+                "`sorry`-free."
+            )
+        elif attempt_kind == "hard_finalization":
+            parts.append(
+                "\n## Hard Mode finalization constraint\n\n"
+                "The source order is: prelude, context, accepted declarations, NEW "
+                "DECLARATIONS, FILLED PLACEHOLDER, FINAL THEOREM BODY. Do not place any "
+                "declaration after the placeholder. Preserve this exact placeholder "
+                "header byte-for-byte:\n\n"
+                "```lean4\n" + placeholder_header + "\n```\n\n"
+                "The reasoner's proposed concrete English answer is:\n\n"
+                "<english_answer>\n" + answer.strip() + "\n</english_answer>\n\n"
+                "All three output code regions must contain no `sorry`."
+            )
         if repair_context is not None:
+            if repair_context.attempt_kind != attempt_kind:
+                raise ValueError("repair context attempt kind does not match prompt")
             parts.append(
                 "\n## Previous rejected translation — repair this exact output\n\n"
                 f"The `{repair_context.failed_check}` check failed. The complete previous "
@@ -177,8 +306,8 @@ class TranslationAgent:
                 "### Required repair behavior\n\n"
                 "Fix every compiler error listed above. Use the reported source region and "
                 "numbered excerpt to repair the exact failing expression. Preserve unrelated "
-                "working code and the intended English step. Return the complete NEW "
-                "DECLARATIONS and complete UPDATED THEOREM BODY again; do not return a diff or "
+                "working code and the intended English step. Return the complete "
+                f"{output_fields} again; do not return a diff or "
                 "patch. Keep the original theorem header byte-for-byte unchanged."
             )
         elif compiler_feedback:
