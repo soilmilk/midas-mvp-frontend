@@ -47,10 +47,21 @@ def _load_state(root) -> ProofRunState:
 
 def cmd_run(args):
     from midas.loop import run_problem
+    from midas.artifacts import RunDirectoryExistsError
+    problem_dir = _resolve_problem_dir(args.problem_dir)
+    run_root = _run_root(args, problem_dir)
+    if os.path.exists(run_root):
+        sys.exit(str(RunDirectoryExistsError(run_root)))
     if not os.environ.get("OPENROUTER_API_KEY"):
         print("warning: OPENROUTER_API_KEY not set — live agents will fail. `source ~/.midas-mvp.env`",
               file=sys.stderr)
-    state = run_problem(_resolve_problem_dir(args.problem_dir), runs_root=os.path.abspath(args.runs_root))
+    try:
+        state = run_problem(
+            problem_dir,
+            runs_root=os.path.abspath(args.runs_root),
+        )
+    except RunDirectoryExistsError as error:
+        sys.exit(str(error))
     print(f"{state.problem_id}: {state.status}"
           + (f" ({state.failure_reason})" if state.failure_reason else "")
           + f"  | accepted={state.stats.accepted_proof_steps} llm={state.stats.total_llm_calls} "

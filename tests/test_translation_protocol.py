@@ -8,7 +8,7 @@ sys.path.insert(0, ROOT)
 
 from midas.agents import TranslationAgent, TranslationRepairContext
 from midas.parser import parse_translator_output
-from midas.structure import check_structure
+from midas.structure import check_structure, declared_names
 
 
 rows = []
@@ -111,6 +111,42 @@ check("import injection becomes a structure error",
       not imports_structure.ok and
       any("forbidden top-level command: import" in v
           for v in imports_structure.violations))
+
+noncomputable_declarations = (
+    "noncomputable def helperValue : Nat := 5\n\n"
+    "noncomputable abbrev helperAlias : Nat := helperValue"
+)
+noncomputable_structure = check_structure(
+    noncomputable_declarations, BODY_OPEN,
+    "theorem main : True := by", [],
+)
+check("noncomputable declaration modifiers are accepted",
+      noncomputable_structure.ok, repr(noncomputable_structure.violations))
+check("noncomputable declaration names are extracted",
+      declared_names(noncomputable_declarations) ==
+      ["helperValue", "helperAlias"],
+      repr(declared_names(noncomputable_declarations)))
+duplicate_noncomputable = check_structure(
+    "noncomputable def helperValue : Nat := 6", BODY_OPEN,
+    "theorem main : True := by", ["helperValue"],
+)
+check("noncomputable declaration duplicate is rejected",
+      any("repeats previously accepted name: helperValue" in violation
+          for violation in duplicate_noncomputable.violations))
+standalone_noncomputable = check_structure(
+    "noncomputable section", BODY_OPEN,
+    "theorem main : True := by", [],
+)
+check("standalone noncomputable command remains rejected",
+      any("forbidden top-level command: noncomputable" in violation
+          for violation in standalone_noncomputable.violations))
+body_noncomputable = check_structure(
+    "", "noncomputable section\n" + BODY_OPEN,
+    "theorem main : True := by", [],
+)
+check("noncomputable command in theorem body remains rejected",
+      any("body contains forbidden top-level command: noncomputable" in violation
+          for violation in body_noncomputable.violations))
 
 agent = TranslationAgent("offline", "formal considerations", offline_responses=[])
 base = dict(

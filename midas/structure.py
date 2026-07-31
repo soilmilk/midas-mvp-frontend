@@ -57,12 +57,29 @@ _TOP_LEVEL_DECL = re.compile(
 _FORBIDDEN_COMMAND = re.compile(
     r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
     r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
-    r"mutual|include|omit|private|protected|notation|"
+    r"mutual|include|omit|private|protected|noncomputable|notation|"
     r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
+_NONCOMPUTABLE_DECL = re.compile(
+    r"(?m)^[ \t]*noncomputable[ \t]+(?:def|abbrev|instance)\b")
 
 
 def declared_names(code: str) -> List[str]:
     return _DECL_NAME.findall(code or "")
+
+
+def _first_forbidden_command(source: str, *,
+                             allow_noncomputable_declarations: bool = False):
+    """Find a forbidden command, optionally permitting declaration modifiers."""
+    allowed_starts = (
+        {match.start() for match in _NONCOMPUTABLE_DECL.finditer(source)}
+        if allow_noncomputable_declarations else set()
+    )
+    return next(
+        (command for command in _FORBIDDEN_COMMAND.finditer(source)
+         if not (command.group(0).strip() == "noncomputable"
+                 and command.start() in allowed_starts)),
+        None,
+    )
 
 
 @dataclass
@@ -204,7 +221,10 @@ def check_structure(declarations: str, body: str, header: str,
         ("declarations", declarations or ""),
         ("body", body or ""),
     ):
-        forbidden = _FORBIDDEN_COMMAND.search(_mask_comments(source))
+        forbidden = _first_forbidden_command(
+            _mask_comments(source),
+            allow_noncomputable_declarations=(region_name == "declarations"),
+        )
         if forbidden:
             command = forbidden.group(0).strip().split()[0]
             v.append(f"{region_name} contains forbidden top-level command: {command}")

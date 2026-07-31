@@ -257,6 +257,10 @@ Easy final translations contain `NEW DECLARATIONS` and a complete `FINAL THEOREM
 translations contain `NEW DECLARATIONS`, `FILLED PLACEHOLDER`, and `FINAL THEOREM BODY`, in that
 order. An exploration translation cannot fill the placeholder.
 
+Entries in `NEW DECLARATIONS` may use `noncomputable` as a declaration modifier, for example
+`noncomputable def angleMod ...`. A standalone command such as `noncomputable section` remains
+forbidden, as does `noncomputable` in the theorem-body region.
+
 The selected translator schema is exact:
 
 ```text
@@ -323,6 +327,11 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 
 <img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
+The run root contains `log.txt`, whose indented events use elapsed timestamps beginning at
+`0h 0m 0s 0ms`. It records models, waits, Lean compilation stages, artifact paths, retries,
+diagnostics, acceptance decisions, and final totals. The console mirrors a concise subset and
+flushes each event immediately, so its last line identifies the current or latest activity.
+
 Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts store
 `declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
 their proposed `placeholder.lean`. Every compiled attempt also retains
@@ -377,11 +386,12 @@ Common statuses are:
 > you get `ModuleNotFoundError: No module named 'midas'`.
 
 All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<problem_id>/`
-(override the location with `--runs-root DIR`).
+(override the location with `--runs-root DIR`). A run never overwrites or appends to an existing
+problem run directory: rename that directory before starting the problem again.
 
 | command | what it does |
 |---|---|
-| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree + `state.json`. |
+| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree, `state.json`, and `log.txt`; refuses an existing run folder. |
 | `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
 | `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
 | `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |

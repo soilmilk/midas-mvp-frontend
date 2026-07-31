@@ -16,7 +16,7 @@ from .structure import (check_filled_placeholder, check_structure,
                         body_contains_sorry, declared_names)
 from .verifier_client import make_verifier, build_compile_json
 from .reconstructor import RenderedSource, SourceRegion, render_source
-from .artifacts import Paths, LeanArtifactLogger, StateManager
+from .artifacts import Paths, LeanArtifactLogger, RunEventLogger, StateManager
 
 CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "considerations")
 
@@ -258,12 +258,53 @@ themselves were wrong or too large, tighten INFORMAL_REASONING_CONSIDERATIONS.md
 def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_offline: Optional[List[OfflineResponse]] = None,
                 translation_offline: Optional[List[OfflineResponse]] = None) -> ProofRunState:
-    prob = load_problem(problem_dir)
-    runs_root = runs_root or os.path.join(prob.root, "runs")
-    paths = Paths(runs_root, prob.problem_id)
+    problem_dir = os.path.abspath(problem_dir)
+    problem_id = os.path.basename(problem_dir.rstrip("/"))
+    runs_root = runs_root or os.path.join(problem_dir, "runs")
+    paths = Paths(runs_root, problem_id)
+    events = RunEventLogger(paths)
+    events.event(f"Run started: {problem_id}", console=True, elapsed_ms=0)
+    events.event(f"Problem directory: {problem_dir}", indent=1)
+    events.event(f"Run directory: {paths.root}", indent=1)
+    try:
+        prob = load_problem(problem_dir)
+    except Exception as error:
+        events.event(
+            f"Problem loading failed: {type(error).__name__}: {error}",
+            indent=1, console=True,
+        )
+        events.close()
+        raise
     logger = LeanArtifactLogger(paths)
     statemgr = StateManager(paths)
-    verifier = make_verifier(prob.config)   # "fresh" (default) or "warm" (midas_proof_verifier)
+    events.event(
+        f"Configuration: mode={prob.config.problem_mode}, "
+        f"reasoner={prob.config.reasoning_model}, "
+        f"translator={prob.config.translation_model}, "
+        f"verifier={prob.config.verifier_backend}",
+        indent=1,
+    )
+    events.event(
+        f"Limits: proof_steps={prob.config.max_proof_steps}, "
+        f"candidates_per_step={prob.config.max_informal_candidates_per_proof_step}, "
+        f"translations_per_candidate={prob.config.max_lean_translation_attempts_per_candidate}, "
+        f"lean_attempts={prob.config.max_total_lean_attempts}, "
+        f"runtime_seconds={prob.config.max_runtime_seconds}",
+        indent=1,
+    )
+    events.event(
+        f"Initializing {prob.config.verifier_backend} Lean 4 verifier",
+        indent=1, console=True,
+    )
+    try:
+        verifier = make_verifier(prob.config)   # fresh process or warm transaction server
+    except Exception as error:
+        events.event(
+            f"Verifier initialization failed: {type(error).__name__}: {error}",
+            indent=1, console=True,
+        )
+        events.close()
+        raise
 
     state = ProofRunState(
         problem_id=prob.problem_id,
@@ -292,18 +333,52 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     last_error = ""
 
     def bump(cat): category_counts[cat] = category_counts.get(cat, 0) + 1
+    def log_diagnostics(errors, indent):
+        for error in _diagnostics(errors):
+            location = f"{error.file}:{error.line}:{error.col}"
+            code = f" ({error.code})" if error.code else ""
+            events.event(
+                f"{error.severity}{code} at {location}: {error.message}",
+                indent=indent,
+            )
     def finish(reason=None):
         state.stats.runtime_seconds = _now() - start
         statemgr.save(state)
+        events.event(
+            f"Run finished: status={state.status}"
+            + (f", reason={state.failure_reason}" if state.failure_reason else ""),
+            console=True,
+        )
+        events.event(
+            f"Totals: accepted_steps={state.stats.accepted_proof_steps}, "
+            f"llm_calls={state.stats.total_llm_calls}, "
+            f"lean_compiles={state.stats.total_lean_compiles}, "
+            f"lean_attempts={state.stats.total_lean_attempts}, "
+            f"runtime_seconds={state.stats.runtime_seconds:.3f}",
+            indent=1,
+        )
+        events.event("Closing Lean 4 verifier", indent=1)
         try: verifier.close()        # terminate the warm subprocess if the warm backend is in use
         except Exception: pass
+        events.close()
         return state
 
     # ---- input validation (§4) ----
+    events.event("Input validation started", indent=1, console=True)
+    events.event(
+        "Compiling Lean 4 input checkpoint (context and initial theorem body)",
+        indent=2, console=True,
+    )
+    validation_started = _now()
     validator = InputValidator(verifier)
     try:
         vr = validator.validate(prob)
     except Exception as e:                     # defensive header error etc.
+        events.event(
+            f"Input validation raised {type(e).__name__} after "
+            f"{_now() - validation_started:.3f}s: {e}",
+            indent=2, console=True,
+        )
         bump("initial_body_failed")
         failures.write(state, "initial_body_failed", prob.context, prob.body_initial, str(e), category_counts)
         return finish()
@@ -311,6 +386,12 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     state.placeholder_header = vr.placeholder_header or None
     state.placeholder_name = vr.placeholder_name or None
     state.stats.total_lean_compiles += vr.compile_count
+    events.event(
+        f"Input validation {'passed' if vr.ok else 'failed'} after "
+        f"{_now() - validation_started:.3f}s; lean_compiles={vr.compile_count}"
+        + (f", reason={vr.reason}" if vr.reason else ""),
+        indent=2, console=True,
+    )
     if vr.context_check is not None:
         context_status = (
             "accepted"
@@ -336,6 +417,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         )
         statemgr.save(state)
     if not vr.ok:
+        log_diagnostics(_check_errs(vr), 3)
         bump(vr.reason)
         failures.write(state, vr.reason, prob.context, prob.body_initial,
                        _feedback_from_errors(_check_errs(vr)), category_counts)
@@ -358,6 +440,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     while state.status == "running":
         lim = limits.exceeded(state)
         if lim:
+            events.event(f"Run limit reached: {lim}", indent=1, console=True)
             failures.write(state, lim, _env_text(
                                prelude, prob.context, accepted_decls,
                                placeholder_initial_source
@@ -368,6 +451,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         i = len(state.proof_steps) + 1
         ps = ProofStep(proof_step_index=i)
         state.proof_steps.append(ps)
+        events.event(f"Proof step {i} started", indent=1, console=True)
         step_accepted = False
         reasoning_feedback = ""
         failed_next_step = ""
@@ -375,8 +459,13 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         for j in range(1, prob.config.max_informal_candidates_per_proof_step + 1):
             ic = InformalCandidate(informal_candidate_index=j)
             ps.informal_candidates.append(ic)
+            events.event(f"Candidate {j} started", indent=2, console=True)
             statemgr.save(state)
             if _now() >= deadline:
+                events.event(
+                    "Run limit reached: max_runtime_seconds",
+                    indent=2, console=True,
+                )
                 failures.write(state, "max_runtime_seconds", _env_text(
                                    prelude, prob.context, accepted_decls,
                                    placeholder_initial_source
@@ -393,11 +482,23 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             ic.reasoning_prompt_path = logger.write_reasoning_prompt(
                 i, j, reasoning_prompt
             )
+            events.event(
+                f"Reasoning prompt: {ic.reasoning_prompt_path} "
+                f"({len(reasoning_prompt)} chars)",
+                indent=3,
+            )
             statemgr.save(state)
+            reasoning_timeout = call_timeout()
+            events.event(
+                f"Waiting for reasoner response (model={reasoning.model}, "
+                f"timeout={reasoning_timeout:.1f}s)",
+                indent=3, console=True,
+            )
+            reasoning_started = _now()
             try:
                 r = reasoning.propose(
                     attempt_index=j - 1,
-                    timeout=call_timeout(),
+                    timeout=reasoning_timeout,
                     prepared_prompt=reasoning_prompt,
                 )
             except Exception as e:                          # timeout / API error — don't crash
@@ -408,11 +509,25 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 ic.reasoning_call_error_path = logger.write_reasoning_error(
                     i, j, last_error
                 )
+                events.event(
+                    f"Reasoner call failed after {_now() - reasoning_started:.3f}s: "
+                    f"{type(e).__name__}: {str(e)[:200]}",
+                    indent=3, console=True,
+                )
                 reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
                 failed_next_step = ""
                 statemgr.save(state); continue
             state.stats.total_llm_calls += 1
             ic.informal_step_path = logger.write_reasoning_output(i, j, r.text)
+            events.event(
+                f"Reasoner response received after {_now() - reasoning_started:.3f}s "
+                f"({len(r.text)} chars)",
+                indent=3, console=True,
+            )
+            events.event(
+                f"Reasoner response artifact: {ic.informal_step_path}",
+                indent=4,
+            )
             statemgr.save(state)
             action = parse_reasoning_action(r.text, prob.config.problem_mode)
 
@@ -426,6 +541,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     "and an exact IS_FINAL_STEP Boolean."
                 )
                 failed_next_step = ""
+                events.event(
+                    f"Reasoner action rejected: {action.error}",
+                    indent=3, console=True,
+                )
                 statemgr.save(state)
                 continue
 
@@ -433,12 +552,18 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             attempt_kind = attempt_kind_for(
                 problem_mode, bool(action.is_final_step)
             )
+            events.event(
+                f"Reasoner action accepted: kind={attempt_kind}, "
+                f"next_step={action.next_step[:200]!r}",
+                indent=3,
+            )
             candidate_accepted = False
             compiler_feedback = ""
             repair_context = None
             for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
                 lim = limits.exceeded(state)
                 if lim:
+                    events.event(f"Run limit reached: {lim}", indent=3, console=True)
                     failures.write(state, lim, _env_text(
                                        prelude, prob.context, accepted_decls,
                                        placeholder_initial_source
@@ -455,6 +580,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     ),
                 )
                 ic.lean_translation_attempts.append(la)
+                events.event(
+                    f"Lean translation attempt {k} started (kind={attempt_kind})",
+                    indent=3, console=True,
+                )
                 statemgr.save(state)
                 translation_prompt = translation.build_prompt(
                     header, prob.informal_problem, prelude, prob.context,
@@ -474,11 +603,23 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 la.translator_prompt_path = logger.write_translation_prompt(
                     i, j, k, translation_prompt
                 )
+                events.event(
+                    f"Translator prompt: {la.translator_prompt_path} "
+                    f"({len(translation_prompt)} chars)",
+                    indent=4,
+                )
                 statemgr.save(state)
+                translation_timeout = call_timeout()
+                events.event(
+                    f"Waiting for translator response (model={translation.model}, "
+                    f"timeout={translation_timeout:.1f}s)",
+                    indent=4, console=True,
+                )
+                translation_started = _now()
                 try:
                     t = translation.translate(
                         attempt_index=k - 1,
-                        timeout=call_timeout(),
+                        timeout=translation_timeout,
                         prepared_prompt=translation_prompt,
                     )
                 except Exception as e:                      # timeout / API error — don't crash
@@ -501,11 +642,25 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         logger, la, paths, i, j, k, failed_result,
                         None, None, cj,
                     )
+                    events.event(
+                        f"Translator call failed after {_now() - translation_started:.3f}s: "
+                        f"{type(e).__name__}: {str(e)[:200]}",
+                        indent=4, console=True,
+                    )
                     compiler_feedback = "The previous translation call did not return; keep the output short."
                     statemgr.save(state); continue
                 state.stats.total_llm_calls += 1
                 la.raw_translator_output_path = logger.write_translation_output(
                     i, j, k, t.text
+                )
+                events.event(
+                    f"Translator response received after {_now() - translation_started:.3f}s "
+                    f"({len(t.text)} chars)",
+                    indent=4, console=True,
+                )
+                events.event(
+                    f"Translator response artifact: {la.raw_translator_output_path}",
+                    indent=5,
                 )
                 statemgr.save(state)
 
@@ -527,6 +682,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         "Emit the complete required transaction."
                     )
                     repair_context = None
+                    events.event(
+                        f"Translator output parse failed: {pr.error}; retrying",
+                        indent=4, console=True,
+                    )
                     statemgr.save(state); continue
 
                 dp, pp, bp = logger.write_parsed_translation(
@@ -585,7 +744,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         diagnostics=structure_feedback,
                         attempt_kind=attempt_kind,
                     )
+                    events.event(
+                        f"Structure check failed ({status}); retrying",
+                        indent=4, console=True,
+                    )
+                    for violation in sr.violations:
+                        events.event(violation, indent=5)
                     statemgr.save(state); continue
+
+                events.event("Structure check passed", indent=4)
 
                 # ---- declaration check then body check (§14) ----
                 candidate_placeholder = (
@@ -615,7 +782,17 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 la.body_check_input_path = logger.write_attempt_source(
                     i, j, k, "body_check_input.lean", body_input.text
                 )
+                events.event(
+                    f"Lean inputs: declarations={la.declaration_check_input_path}; "
+                    f"body={la.body_check_input_path}",
+                    indent=5,
+                )
                 statemgr.save(state)
+                events.event(
+                    "Compiling Lean 4 checkpoint (candidate declarations, then theorem body)",
+                    indent=4, console=True,
+                )
+                compile_started = _now()
                 cp = verifier.check(
                     prelude,
                     prob.context,
@@ -656,6 +833,12 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         diagnostics=_render_repair_diagnostics(
                             cj.declaration_check.errors, submitted,
                             attempt_kind=attempt_kind))
+                    events.event(
+                        f"Lean 4 declaration check failed after "
+                        f"{_now() - compile_started:.3f}s; retrying",
+                        indent=4, console=True,
+                    )
+                    log_diagnostics(cj.declaration_check.errors, 5)
                     statemgr.save(state); continue
 
                 state.stats.total_lean_compiles += 1
@@ -702,7 +885,18 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         diagnostics=_render_repair_diagnostics(
                             cj.body_check.errors, submitted,
                             attempt_kind=attempt_kind))
+                    events.event(
+                        f"Lean 4 theorem-body check failed after "
+                        f"{_now() - compile_started:.3f}s ({status}); retrying",
+                        indent=4, console=True,
+                    )
+                    log_diagnostics(cj.body_check.errors, 5)
                     statemgr.save(state); continue
+
+                events.event(
+                    f"Lean 4 checkpoint passed after {_now() - compile_started:.3f}s",
+                    indent=4, console=True,
+                )
 
                 # ---- both checks passed ----
                 if attempt_kind == "exploration":
@@ -721,6 +915,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     state.current_knowledge.append(knowledge)
                     informal_progress += f"\n- {knowledge}"
                     candidate_accepted = step_accepted = True
+                    events.event(
+                        f"Proof step {i} accepted from candidate {j}, attempt {k}",
+                        indent=2, console=True,
+                    )
                     statemgr.save(state); break
                 else:
                     # Final proposals remain non-authoritative until this exact
@@ -741,8 +939,17 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.final_check_input_path = logger.write_attempt_source(
                         i, j, k, "final_check_input.lean", full
                     )
+                    events.event(
+                        f"Final reconstruction input: {la.final_check_input_path}",
+                        indent=5,
+                    )
                     statemgr.save(state)
                     candidate_path = logger.write_final_candidate(full)
+                    events.event(
+                        "Compiling independent final Lean 4 reconstruction",
+                        indent=4, console=True,
+                    )
+                    final_compile_started = _now()
                     try:
                         fr = verifier.compile_full_file(candidate_path)
                     finally:
@@ -754,6 +961,11 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     fc = _final_report(fr)
                     _annotate_report(fc, final_rendered, attempt_kind)
                     if fr.ok and not fr.contains_sorry:
+                        events.event(
+                            f"Final Lean 4 reconstruction passed after "
+                            f"{_now() - final_compile_started:.3f}s",
+                            indent=4, console=True,
+                        )
                         cj = build_compile_json(
                             "final_success", sr, cp, fc,
                             attempt_kind=attempt_kind,
@@ -810,11 +1022,21 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                             ),
                             attempt_kind=attempt_kind,
                         )
+                        events.event(
+                            f"Final Lean 4 reconstruction failed after "
+                            f"{_now() - final_compile_started:.3f}s; retrying",
+                            indent=4, console=True,
+                        )
+                        log_diagnostics(fc.errors, 5)
                         statemgr.save(state); continue
 
             if candidate_accepted:
                 break
             ic.status = "abandoned"
+            events.event(
+                f"Candidate {j} abandoned after exhausting translation attempts",
+                indent=2, console=True,
+            )
             failed_next_step = action.next_step
             reasoning_feedback = (
                 "The step above could not be verified due to being too complex or incorrect. Propose a smaller, "
@@ -829,6 +1051,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             return finish()
         if not step_accepted:
             ps.status = "failed"
+            events.event(
+                f"Proof step {i} failed: all candidates exhausted",
+                indent=1, console=True,
+            )
             failures.write(state, "proof_step_failed", _env_text(
                                prelude, prob.context, accepted_decls,
                                placeholder_initial_source

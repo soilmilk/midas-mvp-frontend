@@ -2,7 +2,7 @@
 Artifact layout (§6) + LeanArtifactLogger + StateManager persistence.
 
 Exact §6 tree:
-  runs/<pid>/ config.json state.json
+  runs/<pid>/ config.json state.json log.txt
     input/ (informal_problem.md context.lean [placeholder.lean] body_initial.lean *_check.json)
     artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{prompt,output,parsed Lean,check inputs,compile.json}
     accepted/proof_step_NNN/{declarations.lean,[placeholder.lean],body.lean}
@@ -10,7 +10,7 @@ Exact §6 tree:
     failure/{failure_report.md,...}
 """
 from __future__ import annotations
-import json, os, shutil
+import json, os, shutil, time
 from typing import Optional
 
 from .models import ProofRunState, CompileJson
@@ -25,6 +25,7 @@ def _w(path: str, text: str):
 class Paths:
     def __init__(self, runs_root: str, pid: str):
         self.root = os.path.join(runs_root, pid)
+        self.log = os.path.join(self.root, "log.txt")
         self.input = os.path.join(self.root, "input")
         self.artifacts = os.path.join(self.root, "artifacts", "proof_steps")
         self.accepted = os.path.join(self.root, "accepted")
@@ -36,6 +37,55 @@ class Paths:
     def ic(self, i, j):  return os.path.join(self.ps(i), f"informal_candidate_{j:03d}")
     def la(self, i, j, k):  return os.path.join(self.ic(i, j), f"lean4_attempt_{k:03d}")
     def accepted_ps(self, i):  return os.path.join(self.accepted, f"proof_step_{i:03d}")
+
+
+class RunDirectoryExistsError(FileExistsError):
+    """Raised before a run can overwrite an existing problem run directory."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(
+            f"Run folder already exists: {path}\n"
+            "Rename the existing run folder before trying again."
+        )
+
+
+class RunEventLogger:
+    """Elapsed-time event log with a concise, opt-in console mirror."""
+
+    def __init__(self, paths: Paths):
+        try:
+            os.makedirs(paths.root, exist_ok=False)
+        except FileExistsError as error:
+            raise RunDirectoryExistsError(paths.root) from error
+        self.path = paths.log
+        self._started_ns = time.monotonic_ns()
+        self._file = open(self.path, "x", buffering=1)
+
+    @staticmethod
+    def _timestamp(elapsed_ms: int) -> str:
+        hours, remainder = divmod(max(0, elapsed_ms), 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        seconds, milliseconds = divmod(remainder, 1_000)
+        return f"{hours}h {minutes}m {seconds}s {milliseconds}ms"
+
+    def event(self, message: str, *, indent: int = 0,
+              console: bool = False, elapsed_ms: Optional[int] = None):
+        if elapsed_ms is None:
+            elapsed_ms = (time.monotonic_ns() - self._started_ns) // 1_000_000
+        prefix = f"[{self._timestamp(elapsed_ms)}] " + "  " * max(0, indent)
+        lines = str(message).splitlines() or [""]
+        for line in lines:
+            rendered = prefix + line
+            self._file.write(rendered + "\n")
+            self._file.flush()
+            if console:
+                print(rendered, flush=True)
+
+    def close(self):
+        if not self._file.closed:
+            self._file.flush()
+            self._file.close()
 
 
 class LeanArtifactLogger:

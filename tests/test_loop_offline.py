@@ -5,12 +5,13 @@ run_problem() through the full §18 control flow, INCLUDING a candidate whose ev
 translation fails, to exercise failed-step feedback, then to final_success.
 Verifies the §6 artifact tree, state.json, and status transitions.
 """
-import os, sys, shutil, json
+import io, os, sys, shutil, json, subprocess
+from contextlib import redirect_stdout
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from midas.loop import run_problem
 from midas.parser import parse_reasoning_action
-from midas.artifacts import StateManager
+from midas.artifacts import RunDirectoryExistsError, StateManager
 
 PROB = os.path.join(ROOT, "problems", "toy")
 RUNS = os.path.join(ROOT, ".test_runs")
@@ -71,8 +72,15 @@ translation = [
       final=True),                                                                  # step3: final_success
 ]
 
-state = run_problem(PROB, runs_root=RUNS,
-                    reasoning_offline=list(reasoning), translation_offline=list(translation))
+console_capture = io.StringIO()
+with redirect_stdout(console_capture):
+    state = run_problem(
+        PROB,
+        runs_root=RUNS,
+        reasoning_offline=list(reasoning),
+        translation_offline=list(translation),
+    )
+console_output = console_capture.getvalue()
 
 root = os.path.join(RUNS, "toy")
 checks = []
@@ -82,6 +90,49 @@ checks.append(("non-final closed body does not finish the run",
                len(state.proof_steps) == 3 and
                state.proof_steps[0].status == "accepted"))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
+log_path = os.path.join(root, "log.txt")
+checks.append(("run log written", os.path.exists(log_path)))
+run_log = open(log_path).read()
+checks.append(("run log starts at exact zero timestamp",
+               run_log.startswith("[0h 0m 0s 0ms] Run started: toy\n")))
+checks.append(("run log uses hierarchical indentation",
+               "]   Proof step 1 started" in run_log and
+               "]     Candidate 1 started" in run_log and
+               "]       Waiting for reasoner response" in run_log and
+               "]         Waiting for translator response" in run_log))
+checks.append(("run log records detailed artifact references",
+               "Reasoning prompt:" in run_log and
+               "Translator response artifact:" in run_log and
+               "compile.json" not in console_output))
+checks.append(("console announces blocking work and outcomes in order",
+               console_output.index("Waiting for reasoner response") <
+               console_output.index("Reasoner call failed") <
+               console_output.index("Waiting for translator response") <
+               console_output.index("Compiling Lean 4 checkpoint") <
+               console_output.index("Run finished: status=final_success")))
+log_before_collision = open(log_path).read()
+state_before_collision = open(os.path.join(root, "state.json")).read()
+collision_error = ""
+try:
+    run_problem(PROB, runs_root=RUNS, reasoning_offline=[], translation_offline=[])
+except RunDirectoryExistsError as error:
+    collision_error = str(error)
+checks.append(("existing run directory is rejected with rename instruction",
+               "Run folder already exists:" in collision_error and
+               "Rename the existing run folder" in collision_error))
+checks.append(("existing run directory remains untouched",
+               open(log_path).read() == log_before_collision and
+               open(os.path.join(root, "state.json")).read() == state_before_collision))
+cli_collision = subprocess.run(
+    [sys.executable, "-m", "midas.cli", "--runs-root", RUNS, "run", "toy"],
+    cwd=ROOT,
+    text=True,
+    capture_output=True,
+)
+checks.append(("CLI rejects existing run before starting work",
+               cli_collision.returncode != 0 and
+               "Rename the existing run folder" in cli_collision.stderr and
+               "Run started" not in cli_collision.stdout))
 checks.append(("initial validation reports written",
                all(os.path.exists(os.path.join(root, "input", name)) for name in
                    ("context_check.json", "initial_body_check.json"))))

@@ -11,8 +11,8 @@
     "open scoped BigOperators",
     "open scoped EuclideanGeometry"
   ],
-  "reasoning_model": "anthropic/claude-opus-5",
-  "translation_model": "anthropic/claude-opus-5",
+  "reasoning_model": "anthropic/claude-opus-5-fast",
+  "translation_model": "anthropic/claude-opus-5-fast",
   "reasoning_effort": "high",
   "verifier_backend": "warm",
   "problem_mode": "easy"

@@ -1,3 +1,7 @@
+## Translate the step (and proof) as new lemmas
+- The provided step and proof should be translated as a lemma, whose proof is based on the provided English proof.
+- It is forbidden to trivially add a have statement with sorry in the theorem body.
+
 ## No "sorry" statements allowed in NEW DECLARATIONS section
 - All the lemmas in NEW DECLARATIONS have to be proved completely - no "sorry" is allowed.
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.

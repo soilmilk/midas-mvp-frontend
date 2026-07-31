@@ -78,7 +78,6 @@ class WarmTxnBackend:
                 "$MIDAS_WARM_LEAN_PATH, $LEAN_PATH, or warm-server/mathlib_leanpath.txt. "
                 "See INTEGRATION.md.")
         self._lib = "Mathlib" if any("Mathlib" in l for l in config.lean_prelude) else "Mathlib"
-        print(f"[warm backend] loading {self._lib} once via {os.path.basename(binary)} …", flush=True)
         env = os.environ.copy()
         if lean_path:
             env["LEAN_PATH"] = lean_path
