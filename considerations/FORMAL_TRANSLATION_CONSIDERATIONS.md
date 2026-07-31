@@ -2,6 +2,10 @@
 - All the lemmas in NEW DECLARATIONS have to be proved completely - no "sorry" is allowed.
 - In addition to lemmas, you can define new objects as needed, to be used in any other part of the proof.
 
+## Update theorem body as much as possible
+- Use the new lemmas in the theorem body to advance the proof.
+- Don't leave the theorem body empty.
+
 ## Follow the selected transaction schema exactly
 - Return every requested section once, in the requested order, with one complete Lean code fence.
 - Do not add sections from a different attempt kind.

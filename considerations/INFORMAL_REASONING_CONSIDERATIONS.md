@@ -1,28 +1,14 @@
 ## Output structure
 
 - Suggest ONE proof step along with its proof.
-- Avoid large jumps, as this step will be translated to Lean 4 by another component. Output simple ideas that can be translated to compilable Lean 4.
+- Avoid large jumps or too complex ideas. 
 
 - Do not propose a complete proof unless the theorem is clearly almost finished.
 - Output should have an intermediate reasoning part, a NEXT STEP part, a PROOF part, and the
   mandatory final-step signal required by the mode-specific action format.
 
-Follow this structure for the output:
-
-INTERMEDIATE REASONING:
-<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>
-
-NEXT STEP:
-<one step>
-
-PROOF:
-<detailed proof of that step>
-
-IS_FINAL_STEP: True | False
-
-- Use exactly `True` or `False`.
+- For IS_FINAL_STEP, use exactly `True` or `False`.
 - Use `True` only when this action completes the entire problem. Otherwise use `False`.
-- Follow any additional mode-specific field requirement in the action format exactly.
 
 ## Ground every step in what already exists
 - Only rely on the current informal progress. Do not invent lemmas that have not been established.

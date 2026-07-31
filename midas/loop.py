@@ -713,11 +713,11 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             ic.status = "abandoned"
             failed_next_step = action.next_step
             reasoning_feedback = (
-                "The step above could not be translated after all Lean attempts. Propose a smaller, "
-                "more direct, or differently formulated step. Do not repeat it unchanged."
+                "The step above could not be verified due to being too complex or incorrect. Propose a smaller, "
+                "more direct, or differently formulated step that is translatable to Lean 4. Do not repeat it unchanged."
                 if failed_next_step else
-                "The previous informal candidate could not be translated to Lean. Suggest a simpler "
-                "or more direct step."
+                "The previous step could not be verified due to being too complex or incorrect. Propose a smaller, "
+                "more direct, or differently formulated step that is translatable to Lean 4. Do not repeat it unchanged."
             )
             statemgr.save(state)
 

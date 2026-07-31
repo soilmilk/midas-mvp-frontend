@@ -98,21 +98,21 @@ class ReasoningAgent:
             "\n## Current progress (Assume everything in this section has been already proved)\n" + (informal_progress or "(none yet)"),
         ]
         if failed_next_step:
-            parts.append("\n## Previous step that could not be translated to Lean\n\n" +
+            parts.append("\n## Previous step that could not be verified\n\n" +
                          failed_next_step)
         if failure_feedback:
             parts.append("\n## Feedback\n" + failure_feedback)
-        parts.append("\n## Considerations\n" + self.considerations)
+        
         if problem_mode == "easy":
             parts.append(
                 "\n## Required action format\n\n"
                 "Return exactly one action using these fields in this order:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<English reasoning>\n\n"
+                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>\n\n"
                 "NEXT STEP:\n"
-                "<one non-empty English proof step>\n\n"
+                "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
-                "<a non-empty English proof of that step>\n\n"
+                "<a non-empty English detailed proof of that step>\n\n"
                 "IS_FINAL_STEP: True | False\n\n"
                 "Use `True` exactly when this step completes the theorem; otherwise use "
                 "`False`."
@@ -122,11 +122,11 @@ class ReasoningAgent:
                 "\n## Required action format\n\n"
                 "For a non-final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<English reasoning>\n\n"
+                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>\n\n"
                 "NEXT STEP:\n"
-                "<one non-empty English proof step>\n\n"
+                "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
-                "<a non-empty English proof of that step>\n\n"
+                "<a non-empty English detailed proof of that step>\n\n"
                 "IS_FINAL_STEP: False\n\n"
                 "For a final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
@@ -139,8 +139,9 @@ class ReasoningAgent:
                 "ANSWER:\n"
                 "<the concrete mathematical answer in English or mathematical notation>\n\n"
                 "ANSWER is required and non-empty exactly for a final action. It is "
-                "forbidden for a non-final action and must not contain Lean source."
+                "forbidden for a non-final action."
             )
+        parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
     def propose(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
