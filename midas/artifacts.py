@@ -4,7 +4,7 @@ Artifact layout (§6) + LeanArtifactLogger + StateManager persistence.
 Exact §6 tree:
   runs/<pid>/ config.json state.json
     input/ (informal_problem.md context.lean [placeholder.lean] body_initial.lean *_check.json)
-    artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{...}
+    artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{prompt,output,parsed Lean,check inputs,compile.json}
     accepted/proof_step_NNN/{declarations.lean,[placeholder.lean],body.lean}
     tmp/ final/{solution.lean,solution.md,[placeholder.lean],body.lean}
     failure/{failure_report.md,...}
@@ -59,28 +59,71 @@ class LeanArtifactLogger:
         _w(os.path.join(self.p.input, name), cj.model_dump_json(indent=2))
 
     # -- reasoning (ic level) --
+    def write_reasoning_prompt(self, i, j, prompt: str):
+        path = os.path.join(self.p.ic(i, j), "reasoning_prompt.md")
+        _w(path, prompt)
+        return path
+
+    def write_reasoning_output(self, i, j, informal_step: str):
+        path = os.path.join(self.p.ic(i, j), "informal_step.md")
+        _w(path, informal_step)
+        return path
+
+    def write_reasoning_error(self, i, j, error: str):
+        path = os.path.join(self.p.ic(i, j), "reasoning_call_error.txt")
+        _w(path, error)
+        return path
+
     def write_reasoning(self, i, j, prompt: str, informal_step: str):
-        _w(os.path.join(self.p.ic(i, j), "reasoning_prompt.md"), prompt)
-        _w(os.path.join(self.p.ic(i, j), "informal_step.md"), informal_step)
+        self.write_reasoning_prompt(i, j, prompt)
+        self.write_reasoning_output(i, j, informal_step)
 
     # -- translation (la level) --
+    def write_translation_prompt(self, i, j, k, prompt: str):
+        path = os.path.join(self.p.la(i, j, k), "translator_prompt.md")
+        _w(path, prompt)
+        return path
+
+    def write_translation_output(self, i, j, k, raw: str):
+        path = os.path.join(self.p.la(i, j, k), "raw_translator_output.md")
+        _w(path, raw)
+        return path
+
+    def write_parsed_translation(self, i, j, k,
+                                 declarations: Optional[str], body: Optional[str],
+                                 placeholder: Optional[str] = None):
+        d = self.p.la(i, j, k)
+        dp = pp = bp = None
+        if declarations is not None:
+            dp = os.path.join(d, "declarations.lean")
+            _w(dp, declarations)
+        if placeholder is not None:
+            pp = os.path.join(d, "placeholder.lean")
+            _w(pp, placeholder)
+        if body is not None:
+            bp = os.path.join(d, "body.lean")
+            _w(bp, body)
+        return dp, pp, bp
+
+    def write_attempt_source(self, i, j, k, name: str, source: str):
+        path = os.path.join(self.p.la(i, j, k), name)
+        _w(path, source)
+        return path
+
+    def write_compile(self, i, j, k, cj: CompileJson):
+        path = os.path.join(self.p.la(i, j, k), "compile.json")
+        _w(path, cj.model_dump_json(indent=2))
+        return path
+
     def write_translation(self, i, j, k, prompt: str, raw: str,
                           declarations: Optional[str], body: Optional[str], cj: CompileJson,
                           placeholder: Optional[str] = None):
-        d = self.p.la(i, j, k)
-        _w(os.path.join(d, "translator_prompt.md"), prompt)
-        _w(os.path.join(d, "raw_translator_output.md"), raw)
-        if declarations is not None:
-            _w(os.path.join(d, "declarations.lean"), declarations)
-        if placeholder is not None:
-            _w(os.path.join(d, "placeholder.lean"), placeholder)
-        if body is not None:
-            _w(os.path.join(d, "body.lean"), body)
-        _w(os.path.join(d, "compile.json"), cj.model_dump_json(indent=2))
-        return (os.path.join(d, "declarations.lean") if declarations is not None else None,
-                os.path.join(d, "placeholder.lean") if placeholder is not None else None,
-                os.path.join(d, "body.lean") if body is not None else None,
-                os.path.join(d, "compile.json"))
+        self.write_translation_prompt(i, j, k, prompt)
+        self.write_translation_output(i, j, k, raw)
+        dp, pp, bp = self.write_parsed_translation(
+            i, j, k, declarations, body, placeholder
+        )
+        return dp, pp, bp, self.write_compile(i, j, k, cj)
 
     def copy_accepted(self, i, declarations: str, body: str,
                       placeholder: Optional[str] = None):

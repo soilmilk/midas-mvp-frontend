@@ -12,12 +12,13 @@ for deterministic loop/control-flow tests without spending API calls).
 from __future__ import annotations
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional, Union
 
 from .models import AttemptKind
 from .reconstructor import render_source
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+OfflineResponse = Union[str, Exception, Callable[[str], str]]
 
 
 def _client():
@@ -69,7 +70,8 @@ def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None
 # ---------------- ReasoningAgent (§9) ----------------
 class ReasoningAgent:
     def __init__(self, model: str, considerations: str,
-                 offline_responses: Optional[List[str]] = None, max_tokens: int = 32000,
+                 offline_responses: Optional[List[OfflineResponse]] = None,
+                 max_tokens: int = 32000,
                  reasoning_effort: str = "low"):
         self.model = model
         self.considerations = considerations
@@ -144,10 +146,15 @@ class ReasoningAgent:
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
-    def propose(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
-        prompt = self.build_prompt(*args, **kw)
+    def propose(self, *args, attempt_index: int = 0, timeout: float = None,
+                prepared_prompt: Optional[str] = None, **kw) -> LLMResult:
+        prompt = prepared_prompt if prepared_prompt is not None else self.build_prompt(*args, **kw)
         if self.offline is not None:                       # sequential canned queue
             text = self.offline.pop(0) if self.offline else ""
+            if callable(text):
+                text = text(prompt)
+            if isinstance(text, Exception):
+                raise text
             return LLMResult(prompt, text, self.model + "[offline]")
         return _call(self.model, prompt, self.max_tokens,
                      reasoning_effort=self.reasoning_effort, timeout=timeout)
@@ -156,11 +163,13 @@ class ReasoningAgent:
 # ---------------- TranslationAgent (§10) ----------------
 class TranslationAgent:
     def __init__(self, model: str, considerations: str,
-                 offline_responses: Optional[List[str]] = None, max_tokens: int = 32000):
+                 offline_responses: Optional[List[OfflineResponse]] = None,
+                 max_tokens: int = 32000):
         self.model = model
         self.considerations = considerations
         self.offline = offline_responses
         self.max_tokens = max_tokens
+        self.last_prompt = ""
 
     def build_prompt(
         self,
@@ -317,9 +326,16 @@ class TranslationAgent:
         parts.append("\n## Considerations\n" + self.considerations)
         return "\n".join(parts)
 
-    def translate(self, *args, attempt_index: int = 0, timeout: float = None, **kw) -> LLMResult:
-        prompt = self.build_prompt(*args, **kw)
+    def translate(self, *args, attempt_index: int = 0, timeout: float = None,
+                  prepared_prompt: Optional[str] = None, **kw) -> LLMResult:
+        self.last_prompt = ""
+        prompt = prepared_prompt if prepared_prompt is not None else self.build_prompt(*args, **kw)
+        self.last_prompt = prompt
         if self.offline is not None:                       # sequential canned queue
             text = self.offline.pop(0) if self.offline else ""
+            if callable(text):
+                text = text(prompt)
+            if isinstance(text, Exception):
+                raise text
             return LLMResult(prompt, text, self.model + "[offline]")
         return _call(self.model, prompt, self.max_tokens, timeout=timeout)

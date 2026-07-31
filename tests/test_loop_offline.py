@@ -15,13 +15,42 @@ from midas.artifacts import StateManager
 PROB = os.path.join(ROOT, "problems", "toy")
 RUNS = os.path.join(ROOT, ".test_runs")
 shutil.rmtree(RUNS, ignore_errors=True)
+observed = {}
+
+
+def fail_reasoning_after_inspection(prompt):
+    candidate = os.path.join(
+        RUNS, "toy", "artifacts", "proof_steps", "proof_step_001",
+        "informal_candidate_001",
+    )
+    state = json.load(open(os.path.join(RUNS, "toy", "state.json")))
+    observed["reasoning_prompt_precedes_call"] = (
+        open(os.path.join(candidate, "reasoning_prompt.md")).read() == prompt
+        and state["proof_steps"][0]["informal_candidates"][0]["status"] == "pending"
+    )
+    raise RuntimeError("simulated reasoner timeout")
+
+
+def fail_translation_after_inspection(prompt):
+    attempt = os.path.join(
+        RUNS, "toy", "artifacts", "proof_steps", "proof_step_001",
+        "informal_candidate_003", "lean4_attempt_001",
+    )
+    state = json.load(open(os.path.join(RUNS, "toy", "state.json")))
+    pending = state["proof_steps"][0]["informal_candidates"][2]["lean_translation_attempts"][0]
+    observed["translation_prompt_precedes_call"] = (
+        open(os.path.join(attempt, "translator_prompt.md")).read() == prompt
+        and pending["status"] == "pending"
+        and not os.path.exists(os.path.join(attempt, "raw_translator_output.md"))
+    )
+    raise RuntimeError("simulated translator timeout")
 
 def T(decls, body, final=False):
     heading = "FINAL THEOREM BODY" if final else "UPDATED THEOREM BODY"
     return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\n{heading}:\n\n```\n{body}\n```\n"
 
 reasoning = [
-    "",                                                                            # candidate1: empty reasoning output
+    fail_reasoning_after_inspection,                                                # candidate1: failed call
     "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.\n\nIS_FINAL_STEP: False",
     "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
     "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
@@ -32,6 +61,7 @@ translation = [
       "theorem main : f A = f B := by\n  sorry"),                         # compiler failure, then retry
     "unparseable attempt two",
     "unparseable attempt three",
+    fail_translation_after_inspection,                                     # call failure must still be logged
     T("-- A evaluates to 5.\ntheorem A_eq : A = 5 := by decide",
       "theorem main : f A = f B := by\n  decide"),                                  # candidate2: non-final CLOSED, still exploration
     T("-- B evaluates to 5.\ntheorem B_eq : B = 5 := by decide",
@@ -52,6 +82,9 @@ checks.append(("non-final closed body does not finish the run",
                len(state.proof_steps) == 3 and
                state.proof_steps[0].status == "accepted"))
 checks.append(("state.json written", os.path.exists(os.path.join(root, "state.json"))))
+checks.append(("initial validation reports written",
+               all(os.path.exists(os.path.join(root, "input", name)) for name in
+                   ("context_check.json", "initial_body_check.json"))))
 checks.append(("final/solution.lean written", os.path.exists(os.path.join(root, "final", "solution.lean"))))
 checks.append(("final/body.lean written", os.path.exists(os.path.join(root, "final", "body.lean"))))
 multiline_candidate = """INTERMEDIATE REASONING:
@@ -80,13 +113,26 @@ retry_translation_prompt = os.path.join(root, "artifacts", "proof_steps", "proof
                                         "informal_candidate_002", "lean4_attempt_002",
                                         "translator_prompt.md")
 candidate3_prompt = os.path.join(root, "artifacts", "proof_steps", "proof_step_001", "informal_candidate_003", "reasoning_prompt.md")
-checks.append(("empty reasoning candidate skips Lean attempts",
+failed_call_dir = os.path.join(root, "artifacts", "proof_steps", "proof_step_001",
+                               "informal_candidate_003", "lean4_attempt_001")
+checks.append(("failed reasoning call skips Lean attempts",
                os.path.exists(os.path.join(candidate1_dir, "informal_step.md")) and
                not os.path.exists(os.path.join(candidate1_dir, "lean4_attempt_001"))))
+checks.append(("failed reasoning call preserves prompt and error",
+               os.path.getsize(os.path.join(candidate1_dir,
+                                            "reasoning_prompt.md")) > 0 and
+               "simulated reasoner timeout" in open(os.path.join(
+                   candidate1_dir, "reasoning_call_error.txt")).read()))
+checks.append(("reasoning prompt and pending state precede call",
+               observed.get("reasoning_prompt_precedes_call")))
 checks.append(("candidate2 exhausts three Lean attempts", os.path.exists(la1) and os.path.exists(la3)))
 if os.path.exists(la1):
     cj = json.load(open(la1))
     checks.append(("lean4_attempt_001 attempt_status == lemma_failed", cj["attempt_status"] == "lemma_failed"))
+    la1_dir = os.path.dirname(la1)
+    checks.append(("verifier input sources are retained",
+                   all(os.path.exists(os.path.join(la1_dir, name)) for name in
+                       ("declaration_check_input.lean", "body_check_input.lean"))))
 if os.path.exists(retry_translation_prompt):
     retry_prompt = open(retry_translation_prompt).read()
     checks.append(("translator retry includes rejected declaration",
@@ -109,6 +155,25 @@ if os.path.exists(candidate3_prompt):
                    "Do not repeat it unchanged." in prompt))
 else:
     checks.append(("candidate3 reasoning prompt written", False))
+failed_call_compile = os.path.join(failed_call_dir, "compile.json")
+if os.path.exists(failed_call_compile):
+    failed_call = json.load(open(failed_call_compile))
+    checks.append(("failed translator call has an attempt artifact",
+                   failed_call["attempt_status"] == "translation_call_failed"))
+    checks.append(("failed translator call records empty output",
+                   failed_call["translator_output_empty"] is True and
+                   os.path.getsize(os.path.join(failed_call_dir,
+                                                "raw_translator_output.md")) == 0))
+    checks.append(("failed translator call records its error",
+                   "simulated translator timeout" in
+                   failed_call["translation_call_error"]))
+    checks.append(("failed translator call preserves its prompt",
+                   os.path.getsize(os.path.join(failed_call_dir,
+                                                "translator_prompt.md")) > 0))
+else:
+    checks.append(("failed translator call artifact written", False))
+checks.append(("translator prompt and pending state precede call",
+               observed.get("translation_prompt_precedes_call")))
 checks.append(("accepted/proof_step_001..003 present",
                all(os.path.exists(os.path.join(root, "accepted", f"proof_step_{n:03d}", "body.lean")) for n in (1, 2, 3))))
 final_compile = os.path.join(
@@ -118,6 +183,9 @@ final_compile = os.path.join(
 if os.path.exists(final_compile):
     checks.append(("Easy final attempt kind is explicit",
                    json.load(open(final_compile))["attempt_kind"] == "easy_finalization"))
+    checks.append(("independent final-check input is retained",
+                   os.path.exists(os.path.join(os.path.dirname(final_compile),
+                                               "final_check_input.lean"))))
 else:
     checks.append(("Easy final compile artifact written", False))
 # reload state.json and re-verify invariant: exactly one accepted attempt per accepted step

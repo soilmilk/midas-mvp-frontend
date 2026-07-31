@@ -7,9 +7,10 @@ import os, re, time
 from typing import List, Optional
 
 from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
-                     RunStats, CheckReport, Diagnostic, attempt_kind_for)
+                     RunStats, CheckReport, CompileJson, Diagnostic, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
-from .agents import ReasoningAgent, TranslationAgent, TranslationRepairContext
+from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgent,
+                     TranslationRepairContext)
 from .parser import parse_reasoning_action, parse_translator_output
 from .structure import (check_filled_placeholder, check_structure,
                         body_contains_sorry, declared_names)
@@ -255,8 +256,8 @@ themselves were wrong or too large, tighten INFORMAL_REASONING_CONSIDERATIONS.md
 
 
 def run_problem(problem_dir: str, runs_root: Optional[str] = None,
-                reasoning_offline: Optional[List[str]] = None,
-                translation_offline: Optional[List[str]] = None) -> ProofRunState:
+                reasoning_offline: Optional[List[OfflineResponse]] = None,
+                translation_offline: Optional[List[OfflineResponse]] = None) -> ProofRunState:
     prob = load_problem(problem_dir)
     runs_root = runs_root or os.path.join(prob.root, "runs")
     paths = Paths(runs_root, prob.problem_id)
@@ -279,6 +280,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     logger.write_inputs(prob.config.model_dump_json(indent=2),
                         prob.informal_problem, prob.context, prob.body_initial,
                         placeholder=prob.placeholder)
+    statemgr.save(state)
 
     start = _now()
     deadline = start + prob.config.max_runtime_seconds
@@ -309,6 +311,30 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     state.placeholder_header = vr.placeholder_header or None
     state.placeholder_name = vr.placeholder_name or None
     state.stats.total_lean_compiles += vr.compile_count
+    if vr.context_check is not None:
+        context_status = (
+            "accepted"
+            if vr.context_check.declaration_check.passed else "context_failed"
+        )
+        logger.write_input_check(
+            "context_check.json",
+            build_compile_json(
+                context_status, _struct(True, []), vr.context_check
+            ),
+        )
+        initial_status = (
+            "accepted"
+            if vr.context_check.declaration_check.passed
+            and vr.context_check.body_check.passed
+            else vr.reason
+        )
+        logger.write_input_check(
+            "initial_body_check.json",
+            build_compile_json(
+                initial_status, _struct(True, []), vr.initial_body_check
+            ),
+        )
+        statemgr.save(state)
     if not vr.ok:
         bump(vr.reason)
         failures.write(state, vr.reason, prob.context, prob.body_initial,
@@ -349,6 +375,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         for j in range(1, prob.config.max_informal_candidates_per_proof_step + 1):
             ic = InformalCandidate(informal_candidate_index=j)
             ps.informal_candidates.append(ic)
+            statemgr.save(state)
             if _now() >= deadline:
                 failures.write(state, "max_runtime_seconds", _env_text(
                                    prelude, prob.context, accepted_decls,
@@ -356,24 +383,38 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    if problem_mode == "hard" else ""),
                                latest_body, last_error, category_counts)
                 return finish()
+            reasoning_prompt = reasoning.build_prompt(
+                prob.informal_problem,
+                informal_progress,
+                problem_mode=prob.config.problem_mode,
+                failure_feedback=reasoning_feedback,
+                failed_next_step=failed_next_step,
+            )
+            ic.reasoning_prompt_path = logger.write_reasoning_prompt(
+                i, j, reasoning_prompt
+            )
+            statemgr.save(state)
             try:
-                r = reasoning.propose(prob.informal_problem, informal_progress,
-                                      problem_mode=prob.config.problem_mode,
-                                      failure_feedback=reasoning_feedback,
-                                      failed_next_step=failed_next_step, attempt_index=j - 1,
-                                      timeout=call_timeout())
+                r = reasoning.propose(
+                    attempt_index=j - 1,
+                    timeout=call_timeout(),
+                    prepared_prompt=reasoning_prompt,
+                )
             except Exception as e:                          # timeout / API error — don't crash
                 state.stats.total_llm_calls += 1
                 last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
                 bump("reasoning_call_failed"); ic.status = "abandoned"
+                ic.informal_step_path = logger.write_reasoning_output(i, j, "")
+                ic.reasoning_call_error_path = logger.write_reasoning_error(
+                    i, j, last_error
+                )
                 reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
                 failed_next_step = ""
                 statemgr.save(state); continue
             state.stats.total_llm_calls += 1
+            ic.informal_step_path = logger.write_reasoning_output(i, j, r.text)
+            statemgr.save(state)
             action = parse_reasoning_action(r.text, prob.config.problem_mode)
-            logger.write_reasoning(i, j, r.prompt, r.text)
-            ic.reasoning_prompt_path = os.path.join(paths.ic(i, j), "reasoning_prompt.md")
-            ic.informal_step_path = os.path.join(paths.ic(i, j), "informal_step.md")
 
             if not action.ok:
                 last_error = f"invalid reasoner action: {action.error}"
@@ -405,30 +446,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    latest_body, last_error, category_counts)
                     return finish()
 
-                try:
-                    t = translation.translate(header, prob.informal_problem, prelude, prob.context, accepted_decls,
-                                              latest_body, informal_candidate,
-                                              compiler_feedback=compiler_feedback,
-                                              repair_context=repair_context,
-                                              attempt_kind=attempt_kind,
-                                              placeholder_header=(
-                                                  placeholder_header
-                                                  if problem_mode == "hard" else None
-                                              ),
-                                              placeholder_initial_source=(
-                                                  placeholder_initial_source
-                                                  if problem_mode == "hard" else None
-                                              ),
-                                              answer=action.answer,
-                                              attempt_index=k - 1,
-                                              timeout=call_timeout())
-                except Exception as e:                      # timeout / API error — don't crash
-                    state.stats.total_llm_calls += 1
-                    last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
-                    bump("translation_call_failed")
-                    compiler_feedback = "The previous translation call did not return; keep the output short."
-                    statemgr.save(state); continue
-                state.stats.total_llm_calls += 1
                 state.stats.total_lean_attempts += 1
                 la = LeanTranslationAttempt(
                     lean_translation_attempt_index=k,
@@ -438,6 +455,59 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     ),
                 )
                 ic.lean_translation_attempts.append(la)
+                statemgr.save(state)
+                translation_prompt = translation.build_prompt(
+                    header, prob.informal_problem, prelude, prob.context,
+                    accepted_decls, latest_body, informal_candidate,
+                    compiler_feedback=compiler_feedback,
+                    repair_context=repair_context,
+                    attempt_kind=attempt_kind,
+                    placeholder_header=(
+                        placeholder_header if problem_mode == "hard" else None
+                    ),
+                    placeholder_initial_source=(
+                        placeholder_initial_source
+                        if problem_mode == "hard" else None
+                    ),
+                    answer=action.answer,
+                )
+                la.translator_prompt_path = logger.write_translation_prompt(
+                    i, j, k, translation_prompt
+                )
+                statemgr.save(state)
+                try:
+                    t = translation.translate(
+                        attempt_index=k - 1,
+                        timeout=call_timeout(),
+                        prepared_prompt=translation_prompt,
+                    )
+                except Exception as e:                      # timeout / API error — don't crash
+                    state.stats.total_llm_calls += 1
+                    last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
+                    bump("translation_call_failed")
+                    la.status = "translation_call_failed"
+                    cj = CompileJson(
+                        attempt_status="translation_call_failed",
+                        attempt_kind=attempt_kind,
+                        translator_output_empty=True,
+                        translation_call_error=last_error,
+                    )
+                    failed_result = LLMResult(
+                        prompt=translation.last_prompt,
+                        text="",
+                        model=translation.model,
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, failed_result,
+                        None, None, cj,
+                    )
+                    compiler_feedback = "The previous translation call did not return; keep the output short."
+                    statemgr.save(state); continue
+                state.stats.total_llm_calls += 1
+                la.raw_translator_output_path = logger.write_translation_output(
+                    i, j, k, t.text
+                )
+                statemgr.save(state)
 
                 pr = parse_translator_output(t.text, attempt_kind)
 
@@ -458,6 +528,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     )
                     repair_context = None
                     statemgr.save(state); continue
+
+                dp, pp, bp = logger.write_parsed_translation(
+                    i, j, k, pr.declarations, pr.body,
+                    placeholder=pr.placeholder,
+                )
+                la.declarations_path = dp
+                la.placeholder_path = pp
+                la.body_path = bp
+                statemgr.save(state)
 
                 prev_names = _names(accepted_decls)
                 sr = check_structure(pr.declarations, pr.body, header, prev_names)
@@ -516,6 +595,27 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     if attempt_kind == "hard_finalization"
                     else ""
                 )
+                declaration_input = _submitted_rendered_source(
+                    prelude, prob.context, accepted_decls,
+                    pr.declarations, pr.body,
+                    prob.config.verifier_backend == "warm",
+                    candidate_placeholder,
+                    include_suffix=False,
+                )
+                body_input = _submitted_rendered_source(
+                    prelude, prob.context, accepted_decls,
+                    pr.declarations, pr.body,
+                    prob.config.verifier_backend == "warm",
+                    candidate_placeholder,
+                )
+                la.declaration_check_input_path = logger.write_attempt_source(
+                    i, j, k, "declaration_check_input.lean",
+                    declaration_input.text,
+                )
+                la.body_check_input_path = logger.write_attempt_source(
+                    i, j, k, "body_check_input.lean", body_input.text
+                )
+                statemgr.save(state)
                 cp = verifier.check(
                     prelude,
                     prob.context,
@@ -638,6 +738,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         theorem_body=pr.body,
                     )
                     full = final_rendered.text
+                    la.final_check_input_path = logger.write_attempt_source(
+                        i, j, k, "final_check_input.lean", full
+                    )
+                    statemgr.save(state)
                     candidate_path = logger.write_final_candidate(full)
                     try:
                         fr = verifier.compile_full_file(candidate_path)

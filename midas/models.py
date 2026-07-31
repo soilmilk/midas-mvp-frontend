@@ -64,6 +64,8 @@ class CheckReport(BaseModel):
 class CompileJson(BaseModel):
     attempt_status: str              # §17 lean_translation_attempt.status
     attempt_kind: AttemptKind = "exploration"
+    translator_output_empty: bool = False
+    translation_call_error: str = ""
     structure_check: CheckReport = Field(default_factory=CheckReport)
     declaration_check: CheckReport = Field(default_factory=CheckReport)
     body_check: CheckReport = Field(default_factory=CheckReport)
@@ -74,7 +76,8 @@ class CompileJson(BaseModel):
 # ---------------- state hierarchy (§5, §17) ----------------
 class LeanTranslationAttempt(BaseModel):
     lean_translation_attempt_index: int
-    # pending | parse_error | format_failed | lemma_failed | body_failed | accepted
+    # pending | translation_call_failed | parse_error | format_failed
+    #        | lemma_failed | body_failed | accepted
     #        | placeholder_format_failed | placeholder_fill_failed
     #        | final_success | final_reconstruction_failed
     #        | hard_full_reconstruction_failed
@@ -87,6 +90,9 @@ class LeanTranslationAttempt(BaseModel):
     placeholder_path: Optional[str] = None
     body_path: Optional[str] = None
     compile_path: Optional[str] = None
+    declaration_check_input_path: Optional[str] = None
+    body_check_input_path: Optional[str] = None
+    final_check_input_path: Optional[str] = None
     attempt_kind: AttemptKind = "exploration"
     proposed_final_answer: Optional[str] = None
 
@@ -96,6 +102,7 @@ class InformalCandidate(BaseModel):
     status: str = "pending"          # pending | accepted | abandoned
     reasoning_prompt_path: Optional[str] = None
     informal_step_path: Optional[str] = None
+    reasoning_call_error_path: Optional[str] = None
     lean_translation_attempts: List[LeanTranslationAttempt] = Field(default_factory=list)
 
 

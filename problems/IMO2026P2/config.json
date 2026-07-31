@@ -1,0 +1,20 @@
+{
+  "max_proof_steps": 100,
+  "max_informal_candidates_per_proof_step": 3,
+  "max_lean_translation_attempts_per_candidate": 4,
+  "max_total_lean_attempts": 400,
+  "max_runtime_seconds": 21600,
+  "lean_prelude": [
+    "import Mathlib", 
+    "import Aesop",
+    "set_option maxHeartbeats 0",
+    "open scoped BigOperators",
+    "open scoped EuclideanGeometry"
+  ],
+  "reasoning_model": "anthropic/claude-opus-5",
+  "translation_model": "anthropic/claude-opus-5",
+  "reasoning_effort": "high",
+  "verifier_backend": "warm",
+  "problem_mode": "easy"
+}
+

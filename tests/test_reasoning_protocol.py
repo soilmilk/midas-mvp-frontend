@@ -96,8 +96,8 @@ check("Easy prompt requires final flag", "IS_FINAL_STEP" in easy_prompt)
 check("Easy prompt contains no ANSWER substring", "ANSWER" not in easy_prompt)
 check("Hard prompt explains conditional ANSWER",
       "ANSWER is required and non-empty exactly for a final action" in hard_prompt)
-check("Hard prompt says answer is English-space",
-      "must not contain Lean source" in hard_prompt)
+check("Hard prompt requests an English or mathematical answer",
+      "the concrete mathematical answer in English or mathematical notation" in hard_prompt)
 check("reasoner retry retains failed NEXT STEP",
       "FAILED_ENGLISH_STEP_SENTINEL" in easy_prompt)
 check("reasoner prompt contains only supplied English state",

@@ -325,7 +325,14 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 
 Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts store
 `declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
-their proposed `placeholder.lean`. Failed final proposals remain attempt artifacts only.
+their proposed `placeholder.lean`. Every compiled attempt also retains
+`declaration_check_input.lean` and `body_check_input.lean`; final attempts retain
+`final_check_input.lean`. Failed final proposals remain attempt artifacts only.
+
+Artifacts are persisted in stages: pending state and prompts before model calls, raw responses
+before parsing, parsed Lean regions before verification, and compile reports after verification.
+The input directory retains `context_check.json` and `initial_body_check.json` from startup
+validation.
 
 A successful Hard Mode run writes:
 
@@ -345,8 +352,11 @@ The accepted final proof step also contains its declarations, filled placeholder
 
 Common statuses are:
 
-`pending · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
+`pending · translation_call_failed · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
 
+- **`translation_call_failed`** — the translator call returned no response. The attempt directory
+  retains the prompt, an empty `raw_translator_output.md`, and the exception in `compile.json`;
+  every Lean check is `not_run`.
 - **`parse_error`** — raw model output did not match the selected attempt schema.
 - **`format_failed` / `placeholder_format_failed`** — parsed output broke a structural rule.
 - **`lemma_failed` / `body_failed`** — the declaration / body compile failed.

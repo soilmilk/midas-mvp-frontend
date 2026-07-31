@@ -132,6 +132,9 @@ def cmd_show(args):
 
     dump("REASONING PROMPT", os.path.join(icd, "reasoning_prompt.md"))
     dump("INFORMAL STEP", os.path.join(icd, "informal_step.md"))
+    reasoning_error = os.path.join(icd, "reasoning_call_error.txt")
+    if os.path.exists(reasoning_error):
+        dump("REASONING CALL ERROR", reasoning_error)
     dump("TRANSLATOR PROMPT", os.path.join(lad, "translator_prompt.md"))
     dump("RAW TRANSLATOR OUTPUT", os.path.join(lad, "raw_translator_output.md"))
     dump("PARSED declarations.lean", os.path.join(lad, "declarations.lean"))
@@ -139,6 +142,14 @@ def cmd_show(args):
     if os.path.exists(placeholder_path):
         dump("PARSED placeholder.lean", placeholder_path)
     dump("PARSED body.lean", os.path.join(lad, "body.lean"))
+    for title, name in (
+        ("DECLARATION CHECK INPUT", "declaration_check_input.lean"),
+        ("BODY CHECK INPUT", "body_check_input.lean"),
+        ("FINAL CHECK INPUT", "final_check_input.lean"),
+    ):
+        source_path = os.path.join(lad, name)
+        if os.path.exists(source_path):
+            dump(title, source_path)
     dump("compile.json", os.path.join(lad, "compile.json"))
 
 
@@ -192,10 +203,14 @@ def cmd_replay(args):
     original_status = compile_data.get(
         "attempt_status", la.status if la is not None else "unknown"
     )
-    if original_status == "parse_error":
+    if original_status in ("translation_call_failed", "parse_error"):
+        reason = (
+            "the translator call returned no output"
+            if original_status == "translation_call_failed"
+            else "the translator response did not produce a valid parsed checkpoint"
+        )
         sys.exit(
-            "attempt is not replayable: the translator response did not produce "
-            "a valid parsed checkpoint; use `show` to inspect it"
+            f"attempt is not replayable: {reason}; use `show` to inspect it"
         )
 
     config_data = json.load(open(os.path.join(root, "config.json")))
