@@ -36,7 +36,12 @@ def extract_header(body_initial: str) -> str:
     return header.lstrip("\n").rstrip() if start else header[: idx + len(BY_MARKER)]
 
 
-_DECL_NAME = re.compile(r"(?m)^\s*(?:theorem|lemma|def|abbrev|instance)\s+([A-Za-z_][A-Za-z0-9_.']*)")
+_DECL_NAME = re.compile(
+    r"(?m)^\s*(?:noncomputable\s+)?"
+    r"(?:theorem|lemma|def|abbrev|instance)\s+"
+    r"([A-Za-z_][A-Za-z0-9_.']*)"
+)
+
 _THM_DECL = re.compile(r"(?m)^\s*theorem\s+[A-Za-z_]")
 _SORRY = re.compile(r"\bsorry\b")
 _PLACEHOLDER_DECL = re.compile(
@@ -52,7 +57,7 @@ _TOP_LEVEL_DECL = re.compile(
 _FORBIDDEN_COMMAND = re.compile(
     r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
     r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
-    r"mutual|include|omit|private|protected|noncomputable|notation|"
+    r"mutual|include|omit|private|protected|notation|"
     r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
 
 
