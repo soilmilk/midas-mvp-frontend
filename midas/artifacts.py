@@ -67,7 +67,7 @@ class RunEventLogger:
         hours, remainder = divmod(max(0, elapsed_ms), 3_600_000)
         minutes, remainder = divmod(remainder, 60_000)
         seconds, milliseconds = divmod(remainder, 1_000)
-        return f"{hours}h {minutes}m {seconds}s {milliseconds}ms"
+        return f"{hours:02d}h {minutes:02d}m {seconds:02d}s {milliseconds:03d}ms"
 
     def event(self, message: str, *, indent: int = 0,
               console: bool = False, elapsed_ms: Optional[int] = None):

@@ -739,7 +739,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     )
                     repair_context = None
                     events.event(
-                        f"Translator output parse failed: {pr.error}; retrying",
+                        "Translator output parse failed; retrying",
                         indent=4, console=True,
                     )
                     statemgr.save(state); continue

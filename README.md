@@ -328,7 +328,7 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 <img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
 The run root contains `log.txt`, whose indented events use elapsed timestamps beginning at
-`0h 0m 0s 0ms`. It records models, waits, Lean compilation stages, artifact paths, retries,
+`00h 00m 00s 000ms`. It records models, waits, Lean compilation stages, artifact paths, retries,
 diagnostics, acceptance decisions, and final totals. The console mirrors a concise subset and
 flushes each event immediately, so its last line identifies the current or latest activity.
 

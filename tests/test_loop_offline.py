@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from midas.loop import run_problem
 from midas.parser import parse_reasoning_action
-from midas.artifacts import RunDirectoryExistsError, StateManager
+from midas.artifacts import RunDirectoryExistsError, RunEventLogger, StateManager
 
 PROB = os.path.join(ROOT, "problems", "toy")
 RUNS = os.path.join(ROOT, ".test_runs")
@@ -94,7 +94,10 @@ log_path = os.path.join(root, "log.txt")
 checks.append(("run log written", os.path.exists(log_path)))
 run_log = open(log_path).read()
 checks.append(("run log starts at exact zero timestamp",
-               run_log.startswith("[0h 0m 0s 0ms] Run started: toy\n")))
+               run_log.startswith("[00h 00m 00s 000ms] Run started: toy\n")))
+checks.append(("run log timestamps have fixed width",
+               RunEventLogger._timestamp(0) == "00h 00m 00s 000ms" and
+               RunEventLogger._timestamp(192406) == "00h 03m 12s 406ms"))
 checks.append(("run log uses hierarchical indentation",
                "]   Proof step 1 started" in run_log and
                "]     Candidate 1 started" in run_log and
@@ -115,6 +118,9 @@ checks.append(("console announces blocking work and outcomes in order",
                console_output.index("Waiting for translator response") <
                console_output.index("Compiling Lean 4 checkpoint") <
                console_output.index("Run finished: status=final_success")))
+checks.append(("console keeps parse failures concise",
+               "Translator output parse failed; retrying" in console_output and
+               "Translator output parse failed:" not in console_output))
 log_before_collision = open(log_path).read()
 state_before_collision = open(os.path.join(root, "state.json")).read()
 collision_error = ""
