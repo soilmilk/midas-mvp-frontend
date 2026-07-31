@@ -39,8 +39,13 @@ def extract_header(body_initial: str) -> str:
 _DECL_NAME = re.compile(r"(?m)^\s*(?:theorem|lemma|def|abbrev|instance)\s+([A-Za-z_][A-Za-z0-9_.']*)")
 _THM_DECL = re.compile(r"(?m)^\s*theorem\s+[A-Za-z_]")
 _SORRY = re.compile(r"\bsorry\b")
-_PLACEHOLDER_DEF = re.compile(
-    r"(?m)^[ \t]*def[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_.']*)\b")
+_PLACEHOLDER_DECL = re.compile(
+    r"(?m)^[ \t]*(?:(?P<modifier>noncomputable)[ \t]+)?"
+    r"(?P<kind>def|abbrev)[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_.']*)\b")
+_PLACEHOLDER_TOP_LEVEL_DECL = re.compile(
+    r"(?m)^[ \t]*(?:noncomputable[ \t]+)?"
+    r"(?:theorem|lemma|def|abbrev|instance|example|opaque|axiom|"
+    r"inductive|structure|class)\b")
 _TOP_LEVEL_DECL = re.compile(
     r"(?m)^[ \t]*(?:theorem|lemma|def|abbrev|instance|example|opaque|axiom|"
     r"inductive|structure|class)\b")
@@ -69,7 +74,7 @@ class PlaceholderInfo:
 
 
 class PlaceholderError(ValueError):
-    """The placeholder does not match the supported one-definition shape."""
+    """The placeholder does not match the supported single-declaration shape."""
 
 
 def _mask_comments(source: str) -> str:
@@ -124,25 +129,41 @@ def _mask_comments(source: str) -> str:
 def _placeholder_info(source: str, require_sorry: bool) -> PlaceholderInfo:
     original = source or ""
     masked = _mask_comments(original)
-    forbidden = _FORBIDDEN_COMMAND.search(masked)
-    if forbidden:
+    placeholder_declarations = list(_PLACEHOLDER_DECL.finditer(masked))
+    allowed_noncomputable_lines = {
+        declaration.start()
+        for declaration in placeholder_declarations
+        if declaration.group("modifier") is not None
+    }
+    forbidden = next(
+        (
+            command for command in _FORBIDDEN_COMMAND.finditer(masked)
+            if not (
+                command.group(0).strip() == "noncomputable"
+                and command.start() in allowed_noncomputable_lines
+            )
+        ),
+        None,
+    )
+    if forbidden is not None:
         command = forbidden.group(0).strip().split()[0]
         raise PlaceholderError(f"placeholder contains forbidden top-level command: {command}")
 
-    declarations = list(_TOP_LEVEL_DECL.finditer(masked))
-    definitions = list(_PLACEHOLDER_DEF.finditer(masked))
-    if len(declarations) != 1 or len(definitions) != 1:
-        raise PlaceholderError("placeholder must contain exactly one top-level `def`")
+    declarations = list(_PLACEHOLDER_TOP_LEVEL_DECL.finditer(masked))
+    if len(declarations) != 1 or len(placeholder_declarations) != 1:
+        raise PlaceholderError(
+            "placeholder must contain exactly one top-level `def` or `abbrev`")
 
-    definition = definitions[0]
-    marker = masked.find(BY_MARKER, definition.end())
+    declaration = placeholder_declarations[0]
+    marker = masked.find(BY_MARKER, declaration.end())
     if marker < 0:
-        raise PlaceholderError("placeholder definition must use tactic mode ending in `:= by`")
-    if masked[:definition.start()].strip():
-        raise PlaceholderError("placeholder contains unrelated code before its definition")
+        raise PlaceholderError(
+            "placeholder declaration must use tactic mode ending in `:= by`")
+    if masked[:declaration.start()].strip():
+        raise PlaceholderError("placeholder contains unrelated code before its declaration")
 
-    name = definition.group("name")
-    header = original[definition.start():marker + len(BY_MARKER)].rstrip()
+    name = declaration.group("name")
+    header = original[declaration.start():marker + len(BY_MARKER)].rstrip()
     has_sorry = _SORRY.search(masked) is not None
     if require_sorry and not has_sorry:
         raise PlaceholderError("initial placeholder must contain at least one `sorry`")

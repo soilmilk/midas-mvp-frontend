@@ -103,17 +103,47 @@ try:
     check("placeholder name extracted", info.name == "answer", info.name)
     check("placeholder source retained exactly", info.source == PLACEHOLDER)
 
+    supported_placeholders = {
+        "def": (
+            "def answer : Nat := by\n  sorry\n",
+            "def answer : Nat := by\n  exact 5\n",
+        ),
+        "abbrev": (
+            "abbrev answer : Nat := by\n  sorry\n",
+            "abbrev answer : Nat := by\n  exact 5\n",
+        ),
+        "noncomputable def": (
+            "  noncomputable def answer : Nat := by\n    sorry\n",
+            "  noncomputable def answer : Nat := by\n    exact 5\n",
+        ),
+        "noncomputable abbrev": (
+            "noncomputable abbrev answer : Nat := by\n  sorry\n",
+            "noncomputable abbrev answer : Nat := by\n  exact 5\n",
+        ),
+    }
+    for label, (initial, filled) in supported_placeholders.items():
+        supported_info = extract_placeholder_info(initial)
+        expected_header = initial.split("\n", 1)[0]
+        check(f"accept {label} placeholder",
+              supported_info.header == expected_header and
+              supported_info.name == "answer",
+              repr(supported_info.header))
+        check(f"accept filled {label} placeholder",
+              check_filled_placeholder(
+                  filled, supported_info.header, supported_info.name).ok)
+
     malformed = {
         "missing tactic marker": "def answer : Nat := 5\n",
         "no sorry": FILLED,
         "two definitions": PLACEHOLDER + "\ndef other : Nat := by\n  sorry\n",
         "lemma plus definition": "lemma helper : True := by trivial\n" + PLACEHOLDER,
-        "unsupported abbrev": "abbrev answer : Nat := by\n  sorry\n",
         "unsupported theorem": "theorem answer : Nat := by\n  sorry\n",
         "unsupported instance": "instance answer : Inhabited Nat := by\n  sorry\n",
         "unrelated example": PLACEHOLDER + "\nexample : True := by trivial\n",
         "import injection": "import Mathlib\n" + PLACEHOLDER,
         "namespace injection": "namespace Hidden\n" + PLACEHOLDER + "end Hidden\n",
+        "standalone noncomputable command":
+            "noncomputable section\n" + PLACEHOLDER,
     }
     for label, source in malformed.items():
         try:
@@ -149,6 +179,14 @@ try:
           valid_result.theorem_header == "theorem main : IsCorrectAnswer answer := by")
     check("successful initial validation counts two compiles",
           valid_result.compile_count == 2, str(valid_result.compile_count))
+
+    for label, (initial, _) in supported_placeholders.items():
+        supported_problem = Problem(
+            **{**hard_problem.__dict__, "placeholder": initial})
+        supported_result = validator.validate(supported_problem)
+        check(f"initial validation accepts {label}",
+              supported_result.ok and supported_result.compile_count == 2,
+              supported_result.reason)
 
     ill_placeholder = Problem(
         **{**hard_problem.__dict__,

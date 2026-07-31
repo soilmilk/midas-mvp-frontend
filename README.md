@@ -181,15 +181,17 @@ Rules that matter:
 - `body_initial.lean` contains exactly one tactic-mode theorem whose header ends in `:= by`.
   The header is stored and enforced byte-for-byte on every later body.
 - Hard Mode requires `placeholder.lean`; Easy Mode rejects it.
-- The supported placeholder is exactly one top-level tactic-mode definition:
+- The supported placeholder is exactly one top-level tactic-mode `def` or `abbrev`,
+  optionally prefixed by `noncomputable`:
 
   ```lean4
-  def answer : Nat := by
+  noncomputable def answer : ℝ := by
     sorry
   ```
 
   Its header is preserved byte-for-byte. Imports, namespaces, auxiliary declarations, completed
-  definitions, term-style definitions, and declaration kinds other than `def` are rejected.
+  declarations, term-style declarations, and declaration kinds other than `def` and `abbrev` are
+  rejected. A standalone `noncomputable` command is still forbidden in this file.
 
 Example `config.json`:
 
