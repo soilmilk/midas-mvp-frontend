@@ -4,7 +4,7 @@ and §19 (compile.json). Python 3.9-safe (Optional, from __future__ annotations)
 """
 from __future__ import annotations
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 AttemptKind = Literal[
@@ -112,13 +112,44 @@ class ProofStep(BaseModel):
     informal_candidates: List[InformalCandidate] = Field(default_factory=list)
 
 
+class LLMUsageStats(BaseModel):
+    """Provider-reported accounting; missing usage is never estimated."""
+    calls: int = 0
+    calls_with_token_usage: int = 0
+    calls_with_cost: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    reasoning_tokens: int = 0
+    cached_tokens: int = 0
+    cost_credits: float = 0.0
+
+
+class LLMUsageBreakdown(BaseModel):
+    total: LLMUsageStats = Field(default_factory=LLMUsageStats)
+    reasoner: LLMUsageStats = Field(default_factory=LLMUsageStats)
+    translator: LLMUsageStats = Field(default_factory=LLMUsageStats)
+
+
 class RunStats(BaseModel):
     accepted_proof_steps: int = 0
     total_lean_attempts: int = 0
     started_at: str = ""
     runtime_seconds: float = 0.0
     total_llm_calls: int = 0
+    llm_usage: LLMUsageBreakdown = Field(default_factory=LLMUsageBreakdown)
     total_lean_compiles: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def backfill_legacy_llm_calls(cls, data):
+        """Old states know attempted calls even though they have no usage totals."""
+        if isinstance(data, dict) and "llm_usage" not in data:
+            calls = int(data.get("total_llm_calls") or 0)
+            if calls:
+                data = dict(data)
+                data["llm_usage"] = {"total": {"calls": calls}}
+        return data
 
 
 class ProofRunState(BaseModel):

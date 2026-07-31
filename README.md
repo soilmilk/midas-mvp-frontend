@@ -332,6 +332,13 @@ The run root contains `log.txt`, whose indented events use elapsed timestamps be
 diagnostics, acceptance decisions, and final totals. The console mirrors a concise subset and
 flushes each event immediately, so its last line identifies the current or latest activity.
 
+Each successful LLM response also logs the provider-reported prompt, completion, total,
+reasoning, and cached token counts plus OpenRouter's charged `cost_credits`. The final totals are
+mirrored in `state.json` under `stats.llm_usage`, split into `total`, `reasoner`, and `translator`.
+The `calls_with_token_usage` and `calls_with_cost` counters expose responses where provider
+accounting was unavailable; Midas does not estimate missing costs from model price tables.
+Legacy states load with their historical call count but zero accounted token/cost calls.
+
 Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts store
 `declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
 their proposed `placeholder.lean`. Every compiled attempt also retains

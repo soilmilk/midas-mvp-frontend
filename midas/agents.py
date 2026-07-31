@@ -38,8 +38,13 @@ class LLMResult:
     prompt: str
     text: str
     model: str
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+    # Optional distinguishes missing provider accounting from a genuine zero.
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    cost_credits: Optional[float] = None
 
 
 @dataclass
@@ -63,8 +68,19 @@ def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None
         kw["timeout"] = timeout
     r = _client().chat.completions.create(**kw)
     u = r.usage
-    return LLMResult(prompt, (r.choices[0].message.content or "").strip(), r.model,
-                     getattr(u, "prompt_tokens", 0), getattr(u, "completion_tokens", 0))
+    completion_details = getattr(u, "completion_tokens_details", None)
+    prompt_details = getattr(u, "prompt_tokens_details", None)
+    return LLMResult(
+        prompt=prompt,
+        text=(r.choices[0].message.content or "").strip(),
+        model=r.model,
+        prompt_tokens=getattr(u, "prompt_tokens", None),
+        completion_tokens=getattr(u, "completion_tokens", None),
+        total_tokens=getattr(u, "total_tokens", None),
+        reasoning_tokens=getattr(completion_details, "reasoning_tokens", None),
+        cached_tokens=getattr(prompt_details, "cached_tokens", None),
+        cost_credits=getattr(u, "cost", None),
+    )
 
 
 # ---------------- ReasoningAgent (§9) ----------------

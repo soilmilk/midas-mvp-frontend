@@ -104,6 +104,11 @@ checks.append(("run log records detailed artifact references",
                "Reasoning prompt:" in run_log and
                "Translator response artifact:" in run_log and
                "compile.json" not in console_output))
+checks.append(("run log records per-call and total LLM usage",
+               "Reasoner usage:" in run_log and
+               "Translator usage:" in run_log and
+               "cost_credits=unavailable" in run_log and
+               "accounted_cost_calls=0/" in run_log))
 checks.append(("console announces blocking work and outcomes in order",
                console_output.index("Waiting for reasoner response") <
                console_output.index("Reasoner call failed") <
@@ -244,6 +249,13 @@ st = StateManager.load(root)
 inv = all(sum(1 for c in s.informal_candidates if c.status == "accepted") == 1
           for s in st.proof_steps if s.status in ("accepted", "final_success"))
 checks.append(("invariant: 1 accepted candidate per accepted step", inv))
+usage = st.stats.llm_usage
+checks.append(("offline usage accounts calls without inventing cost",
+               usage.total.calls == st.stats.total_llm_calls and
+               usage.total.calls == usage.reasoner.calls + usage.translator.calls and
+               usage.total.calls_with_token_usage == 0 and
+               usage.total.calls_with_cost == 0 and
+               usage.total.cost_credits == 0))
 
 print(f"{'check':<50}result")
 print("-" * 62)

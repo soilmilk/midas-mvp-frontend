@@ -7,7 +7,8 @@ import os, re, time
 from typing import List, Optional
 
 from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
-                     RunStats, CheckReport, CompileJson, Diagnostic, attempt_kind_for)
+                     RunStats, LLMUsageStats, CheckReport, CompileJson, Diagnostic,
+                     attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgent,
                      TranslationRepairContext)
@@ -23,6 +24,58 @@ CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 
 def _read(p): return open(p).read()
 def _now(): return time.time()
+
+
+def _account_llm_call(state: ProofRunState, role: str,
+                      result: Optional[LLMResult] = None):
+    """Record one attempted call without inventing missing provider usage."""
+    if role not in ("reasoner", "translator"):
+        raise ValueError(f"unsupported LLM role: {role!r}")
+    state.stats.total_llm_calls += 1
+    buckets = (state.stats.llm_usage.total,
+               getattr(state.stats.llm_usage, role))
+    for bucket in buckets:
+        bucket.calls += 1
+        if result is None:
+            continue
+        if result.prompt_tokens is not None or result.completion_tokens is not None:
+            bucket.calls_with_token_usage += 1
+        if result.cost_credits is not None:
+            bucket.calls_with_cost += 1
+        for field in ("prompt_tokens", "completion_tokens", "total_tokens",
+                      "reasoning_tokens", "cached_tokens"):
+            value = getattr(result, field)
+            if value is not None:
+                setattr(bucket, field, getattr(bucket, field) + int(value))
+        if result.cost_credits is not None:
+            bucket.cost_credits += float(result.cost_credits)
+
+
+def _usage_event(role: str, result: LLMResult) -> str:
+    def shown(value):
+        return "unavailable" if value is None else str(value)
+    return (
+        f"{role.capitalize()} usage: model={result.model}, "
+        f"prompt_tokens={shown(result.prompt_tokens)}, "
+        f"completion_tokens={shown(result.completion_tokens)}, "
+        f"total_tokens={shown(result.total_tokens)}, "
+        f"reasoning_tokens={shown(result.reasoning_tokens)}, "
+        f"cached_tokens={shown(result.cached_tokens)}, "
+        f"cost_credits={shown(result.cost_credits)}"
+    )
+
+
+def _usage_totals(stats: LLMUsageStats) -> str:
+    return (
+        f"accounted_token_calls={stats.calls_with_token_usage}/{stats.calls}, "
+        f"accounted_cost_calls={stats.calls_with_cost}/{stats.calls}, "
+        f"prompt_tokens={stats.prompt_tokens}, "
+        f"completion_tokens={stats.completion_tokens}, "
+        f"total_tokens={stats.total_tokens}, "
+        f"reasoning_tokens={stats.reasoning_tokens}, "
+        f"cached_tokens={stats.cached_tokens}, "
+        f"cost_credits={stats.cost_credits:.10g}"
+    )
 
 
 def _feedback_from_errors(errs: List[Diagnostic]) -> str:
@@ -354,7 +407,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             f"llm_calls={state.stats.total_llm_calls}, "
             f"lean_compiles={state.stats.total_lean_compiles}, "
             f"lean_attempts={state.stats.total_lean_attempts}, "
-            f"runtime_seconds={state.stats.runtime_seconds:.3f}",
+            f"runtime_seconds={state.stats.runtime_seconds:.3f}, "
+            + _usage_totals(state.stats.llm_usage.total),
             indent=1,
         )
         events.event("Closing Lean 4 verifier", indent=1)
@@ -502,7 +556,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     prepared_prompt=reasoning_prompt,
                 )
             except Exception as e:                          # timeout / API error — don't crash
-                state.stats.total_llm_calls += 1
+                _account_llm_call(state, "reasoner")
                 last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
                 bump("reasoning_call_failed"); ic.status = "abandoned"
                 ic.informal_step_path = logger.write_reasoning_output(i, j, "")
@@ -517,7 +571,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
                 failed_next_step = ""
                 statemgr.save(state); continue
-            state.stats.total_llm_calls += 1
+            _account_llm_call(state, "reasoner", r)
             ic.informal_step_path = logger.write_reasoning_output(i, j, r.text)
             events.event(
                 f"Reasoner response received after {_now() - reasoning_started:.3f}s "
@@ -528,6 +582,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 f"Reasoner response artifact: {ic.informal_step_path}",
                 indent=4,
             )
+            events.event(_usage_event("reasoner", r), indent=4)
             statemgr.save(state)
             action = parse_reasoning_action(r.text, prob.config.problem_mode)
 
@@ -623,7 +678,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         prepared_prompt=translation_prompt,
                     )
                 except Exception as e:                      # timeout / API error — don't crash
-                    state.stats.total_llm_calls += 1
+                    _account_llm_call(state, "translator")
                     last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
                     bump("translation_call_failed")
                     la.status = "translation_call_failed"
@@ -649,7 +704,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     )
                     compiler_feedback = "The previous translation call did not return; keep the output short."
                     statemgr.save(state); continue
-                state.stats.total_llm_calls += 1
+                _account_llm_call(state, "translator", t)
                 la.raw_translator_output_path = logger.write_translation_output(
                     i, j, k, t.text
                 )
@@ -662,6 +717,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     f"Translator response artifact: {la.raw_translator_output_path}",
                     indent=5,
                 )
+                events.event(_usage_event("translator", t), indent=5)
                 statemgr.save(state)
 
                 pr = parse_translator_output(t.text, attempt_kind)

@@ -45,6 +45,15 @@ def _load_state(root) -> ProofRunState:
     return StateManager.load(root)
 
 
+def _usage_summary(usage):
+    return (
+        f"tokens={usage.total_tokens} "
+        f"cost_credits={usage.cost_credits:.10g} "
+        f"token_usage_calls={usage.calls_with_token_usage}/{usage.calls} "
+        f"cost_calls={usage.calls_with_cost}/{usage.calls}"
+    )
+
+
 def cmd_run(args):
     from midas.loop import run_problem
     from midas.artifacts import RunDirectoryExistsError
@@ -66,7 +75,8 @@ def cmd_run(args):
           + (f" ({state.failure_reason})" if state.failure_reason else "")
           + f"  | accepted={state.stats.accepted_proof_steps} llm={state.stats.total_llm_calls} "
             f"compiles={state.stats.total_lean_compiles} attempts={state.stats.total_lean_attempts} "
-            f"runtime={state.stats.runtime_seconds:.0f}s")
+            f"runtime={state.stats.runtime_seconds:.0f}s "
+            + _usage_summary(state.stats.llm_usage.total))
 
 
 def cmd_status(args):
@@ -83,6 +93,9 @@ def cmd_status(args):
     print(f"stats   : accepted_steps={s.accepted_proof_steps} llm_calls={s.total_llm_calls} "
           f"lean_compiles={s.total_lean_compiles} lean_attempts={s.total_lean_attempts} "
           f"runtime={s.runtime_seconds:.0f}s")
+    print(f"usage   : total      {_usage_summary(s.llm_usage.total)}")
+    print(f"          reasoner   {_usage_summary(s.llm_usage.reasoner)}")
+    print(f"          translator {_usage_summary(s.llm_usage.translator)}")
     print("steps   :")
     for ps in st.proof_steps:
         n_cand = len(ps.informal_candidates)
