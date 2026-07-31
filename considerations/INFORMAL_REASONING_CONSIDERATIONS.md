@@ -10,6 +10,9 @@
 - For IS_FINAL_STEP, use exactly `True` or `False`.
 - Use `True` only when this action completes the entire problem. Otherwise use `False`.
 
+## Don't make the intermediate reasoning block too long.
+- Use at most 1000 words in the "INTERMEDIATE REASONING" section.
+
 ## Ground every step in what already exists
 - Only rely on the current informal progress. Do not invent lemmas that have not been established.
 - When a step needs a fact about a defined object, state that fact as the NEXT STEP first, then

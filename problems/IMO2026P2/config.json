@@ -13,7 +13,7 @@
   ],
   "reasoning_model": "anthropic/claude-opus-5-fast",
   "translation_model": "anthropic/claude-opus-5-fast",
-  "reasoning_effort": "high",
+  "reasoning_effort": "none",
   "verifier_backend": "warm",
   "problem_mode": "easy"
 }

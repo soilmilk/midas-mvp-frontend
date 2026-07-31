@@ -17,6 +17,9 @@
   transaction must be `sorry`-free.
 - Preserve the target theorem header byte-for-byte and return the complete theorem body, not a diff.
 
+## Don't make the intermediate reasoning block too long.
+- Use at most 1000 words in the "INTERMEDIATE REASONING" section.
+
 ## Prefer using the new lemmas in the theorem body instead of leaving them unused.
 
 ## NEW DECLARATIONS can also have definitions:

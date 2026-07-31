@@ -126,7 +126,7 @@ class ReasoningAgent:
                 "\n## Required action format\n\n"
                 "Return exactly one action using these fields in this order:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>\n\n"
+                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be. At most 1000 words.>\n\n"
                 "NEXT STEP:\n"
                 "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
@@ -140,7 +140,7 @@ class ReasoningAgent:
                 "\n## Required action format\n\n"
                 "For a non-final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be>\n\n"
+                "<intermediate reasoning - assess current progress, explore mathematical ideas, decide what the next step should be. At most 1000 words.>\n\n"
                 "NEXT STEP:\n"
                 "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
@@ -148,7 +148,7 @@ class ReasoningAgent:
                 "IS_FINAL_STEP: False\n\n"
                 "For a final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<English reasoning>\n\n"
+                "<English reasoning. At most 1000 words.>\n\n"
                 "NEXT STEP:\n"
                 "<one non-empty English proof step>\n\n"
                 "PROOF:\n"
@@ -229,7 +229,7 @@ class TranslationAgent:
             )
             body_example = (
                 f"{header}\n"
-                "  <updated proof; it may contain `sorry`>"
+                "  <Updated theorem proof, it may use the new lemmas and objects in NEW DECLARATIONS, and can use 'sorry' statements>"
             )
         else:
             body_heading = "FINAL THEOREM BODY"
@@ -245,12 +245,14 @@ class TranslationAgent:
 
         schema = (
             "INTERMEDIATE REASONING:\n"
-            "<reason about the translation>\n\n"
+            "<intermediate reasoning - assess the current Lean 4 file and next English "
+            "step and proof, and reason about how to translate to Lean 4. At most 1000 words.>\n\n"
             "PLAN:\n"
-            "<state the declarations and theorem-body changes>\n\n"
+            "<state which lemmas or definitions you will propose, how you will prove "
+                "them, and how you will change the theorem body>\n\n"
             "NEW DECLARATIONS:\n"
             "```lean4\n"
-            "<complete declarations, or an empty fence>\n"
+            "<New lemmas along with their proofs, any other declarations like object definitions, or an empty fence>\n"
             "```\n\n"
         )
         if attempt_kind == "hard_finalization":
