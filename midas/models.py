@@ -13,6 +13,16 @@ AttemptKind = Literal[
     "hard_finalization",
 ]
 
+ReasoningEffort = Literal[
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+]
+
 
 def attempt_kind_for(problem_mode: str, is_final_step: bool) -> AttemptKind:
     """Derive the translator protocol solely from mode and the reasoner signal."""
@@ -36,7 +46,10 @@ class Config(BaseModel):
     reasoning_model: str = "openai/gpt-5"
     translation_model: str = "anthropic/claude-sonnet-5"
     # gpt-5 is a reasoning model; latency = reasoning tokens. minimal(~1.5s) < low(~6s) < medium/high.
-    reasoning_effort: str = "low"
+    reasoning_effort: ReasoningEffort = "low"
+    # None leaves the translator model/provider default in effect. Set this explicitly
+    # for thinking models so hidden reasoning cannot unexpectedly consume the response budget.
+    translator_reasoning_effort: Optional[ReasoningEffort] = None
     # "fresh" = fresh `lean` per checkpoint (default). "warm" = in-repo warm server
     # (Mathlib resident, paid once) — for a Mathlib prelude. See INTEGRATION.md.
     verifier_backend: str = "fresh"

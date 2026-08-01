@@ -484,7 +484,12 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     placeholder_name = vr.placeholder_name
     prelude = prob.config.lean_prelude
     reasoning = ReasoningAgent(prob.config.reasoning_model, _read(os.path.join(CONSID, "INFORMAL_REASONING_CONSIDERATIONS.md")), reasoning_offline, reasoning_effort=prob.config.reasoning_effort)
-    translation = TranslationAgent(prob.config.translation_model, _read(os.path.join(CONSID, "FORMAL_TRANSLATION_CONSIDERATIONS.md")), translation_offline)
+    translation = TranslationAgent(
+        prob.config.translation_model,
+        _read(os.path.join(CONSID, "FORMAL_TRANSLATION_CONSIDERATIONS.md")),
+        translation_offline,
+        reasoning_effort=prob.config.translator_reasoning_effort,
+    )
 
     accepted_decls: List[str] = []
     latest_body = prob.body_initial

@@ -62,8 +62,10 @@ class TranslationRepairContext:
 def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None,
           timeout: float = None) -> LLMResult:
     kw = dict(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=max_tokens)
-    if reasoning_effort:                       # only for reasoning models (gpt-5); big latency lever
-        kw["reasoning_effort"] = reasoning_effort
+    if reasoning_effort is not None:
+        # OpenRouter's unified reasoning parameter is not part of the OpenAI SDK's
+        # typed chat-completions surface, so forward it in the request body.
+        kw["extra_body"] = {"reasoning": {"effort": reasoning_effort}}
     if timeout is not None:                    # per-call bound (loop caps by remaining runtime budget)
         kw["timeout"] = timeout
     r = _client().chat.completions.create(**kw)
@@ -180,11 +182,13 @@ class ReasoningAgent:
 class TranslationAgent:
     def __init__(self, model: str, considerations: str,
                  offline_responses: Optional[List[OfflineResponse]] = None,
-                 max_tokens: int = 32000):
+                 max_tokens: int = 32000,
+                 reasoning_effort: Optional[str] = None):
         self.model = model
         self.considerations = considerations
         self.offline = offline_responses
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.last_prompt = ""
 
     def build_prompt(
@@ -356,4 +360,5 @@ class TranslationAgent:
             if isinstance(text, Exception):
                 raise text
             return LLMResult(prompt, text, self.model + "[offline]")
-        return _call(self.model, prompt, self.max_tokens, timeout=timeout)
+        return _call(self.model, prompt, self.max_tokens,
+                     reasoning_effort=self.reasoning_effort, timeout=timeout)

@@ -1,7 +1,7 @@
 ## Output structure
 
 - Suggest ONE proof step along with its proof.
-- Avoid large jumps or too complex ideas. 
+- Avoid large jumps or too complex ideas, as this step will be later verified by a Lean 4 model.
 
 - Do not propose a complete proof unless the theorem is clearly almost finished.
 - Output should have an intermediate reasoning part, a NEXT STEP part, a PROOF part, and the

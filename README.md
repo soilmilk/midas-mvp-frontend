@@ -212,6 +212,7 @@ Example `config.json`:
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",
   "reasoning_effort": "low",
+  "translator_reasoning_effort": "low",
   "verifier_backend": "warm"
 }
 ```
@@ -219,6 +220,9 @@ Example `config.json`:
 - `lean_prelude` contains full Lean lines, prepended verbatim.
 - `reasoning_effort` is `minimal | low | medium | high`. It is the largest latency lever;
   `minimal` is fastest but may use no reasoning tokens. See `NOTES.md`.
+- `translator_reasoning_effort` independently controls translator thinking. If omitted, the
+  model/provider default applies. OpenRouter accepts `none | minimal | low | medium | high |
+  xhigh | max`, subject to the selected model's supported levels.
 
 ### Hard Mode protocol and transaction
 

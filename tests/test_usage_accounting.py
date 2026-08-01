@@ -33,13 +33,22 @@ response = SimpleNamespace(
     model="resolved/reasoner",
     choices=[SimpleNamespace(message=SimpleNamespace(content=" answer "))],
 )
+submitted = {}
+
+
+def create_completion(**kwargs):
+    submitted.update(kwargs)
+    return response
+
+
 client = SimpleNamespace(
     chat=SimpleNamespace(
-        completions=SimpleNamespace(create=lambda **kwargs: response)
+        completions=SimpleNamespace(create=create_completion)
     )
 )
 with patch("midas.agents._client", return_value=client):
-    extracted = _call("requested/reasoner", "prompt", 100)
+    extracted = _call("requested/reasoner", "prompt", 100,
+                      reasoning_effort="low")
 
 state = ProofRunState(
     problem_id="usage",
@@ -73,6 +82,9 @@ legacy = ProofRunState.model_validate({
 })
 
 checks = [
+    check("reasoning effort uses OpenRouter unified request body", (
+        submitted.get("extra_body") == {"reasoning": {"effort": "low"}}
+    )),
     check("OpenRouter usage fields extracted", (
         extracted.text == "answer" and extracted.model == "resolved/reasoner" and
         extracted.prompt_tokens == 120 and extracted.completion_tokens == 35 and
