@@ -79,6 +79,8 @@ class CompileJson(BaseModel):
     attempt_kind: AttemptKind = "exploration"
     translator_output_empty: bool = False
     translation_call_error: str = ""
+    translator_rejection_kind: str = ""
+    translator_rejection_reason: str = ""
     structure_check: CheckReport = Field(default_factory=CheckReport)
     declaration_check: CheckReport = Field(default_factory=CheckReport)
     body_check: CheckReport = Field(default_factory=CheckReport)
@@ -89,7 +91,8 @@ class CompileJson(BaseModel):
 # ---------------- state hierarchy (§5, §17) ----------------
 class LeanTranslationAttempt(BaseModel):
     lean_translation_attempt_index: int
-    # pending | translation_call_failed | parse_error | format_failed
+    # pending | translation_call_failed | translator_rejected_step
+    #        | parse_error | format_failed | unproved_body_fact | no_formal_progress
     #        | lemma_failed | body_failed | accepted
     #        | placeholder_format_failed | placeholder_fill_failed
     #        | final_success | final_reconstruction_failed
@@ -108,6 +111,8 @@ class LeanTranslationAttempt(BaseModel):
     final_check_input_path: Optional[str] = None
     attempt_kind: AttemptKind = "exploration"
     proposed_final_answer: Optional[str] = None
+    translator_rejection_kind: str = ""
+    translator_rejection_reason: str = ""
 
 
 class InformalCandidate(BaseModel):
@@ -116,7 +121,15 @@ class InformalCandidate(BaseModel):
     reasoning_prompt_path: Optional[str] = None
     informal_step_path: Optional[str] = None
     reasoning_call_error_path: Optional[str] = None
+    step_usefulness: Optional[Literal["High", "Medium", "Low"]] = None
+    future_ideas: str = ""
     lean_translation_attempts: List[LeanTranslationAttempt] = Field(default_factory=list)
+
+
+class AcceptedKnowledge(BaseModel):
+    """One Lean-verified English step and its relevance estimate when proposed."""
+    statement: str
+    step_usefulness: Optional[Literal["High", "Medium", "Low"]] = None
 
 
 class ProofStep(BaseModel):
@@ -178,11 +191,25 @@ class ProofRunState(BaseModel):
     placeholder_status: Optional[str] = None
     placeholder_final_source: Optional[str] = None
     formal_theorem_header: str = ""
-    current_knowledge: List[str] = Field(default_factory=list)
+    current_knowledge: List[AcceptedKnowledge] = Field(default_factory=list)
+    future_ideas: str = ""
     status: str = "running"          # running | final_success | failed
     failure_reason: Optional[str] = None
     stats: RunStats = Field(default_factory=RunStats)
     proof_steps: List[ProofStep] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_knowledge(cls, data):
+        """Keep old state.json files with string-only knowledge readable."""
+        if isinstance(data, dict) and isinstance(data.get("current_knowledge"), list):
+            data = dict(data)
+            data["current_knowledge"] = [
+                {"statement": item, "step_usefulness": None}
+                if isinstance(item, str) else item
+                for item in data["current_knowledge"]
+            ]
+        return data
 
 
 ACCEPTED_ATTEMPT_STATUSES = {"accepted", "final_success"}

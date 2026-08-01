@@ -27,10 +27,14 @@ def action(next_step: str, *, final=False, answer=None) -> str:
     raw = (
         f"NEXT STEP:\n{next_step}\n\n"
         "PROOF:\nThe claim follows directly from the definitions.\n\n"
+        "STEP USEFULNESS:\nHigh\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}"
     )
     if answer is not None:
         raw += f"\n\nANSWER:\n{answer}"
+    raw += "\n\nIDEAS FOR THE FUTURE:\n" + (
+        "None — the theorem is complete" if final else "[High] Continue from this fact."
+    )
     return raw
 
 
@@ -44,7 +48,11 @@ def transaction(declarations: str, body: str, placeholder=None) -> str:
     else:
         heading = "UPDATED THEOREM BODY"
     sections.append(f"{heading}:\n```lean4\n{body}\n```")
-    return "\n\n".join(sections)
+    return (
+        "INTERMEDIATE REASONING:\nTranslate the exact formal claim.\n\n"
+        "PLAN:\nReturn the complete verified transaction.\n\n"
+        + "\n\n".join(sections)
+    )
 
 
 def make_hard_problem(root: Path, pid: str, translations=2) -> Path:
@@ -299,6 +307,8 @@ try:
         ],
         translation_offline=[
             (
+                "INTERMEDIATE REASONING:\nThe equality is reflexive.\n\n"
+                "PLAN:\nClose the theorem with rfl.\n\n"
                 "NEW DECLARATIONS:\n```lean4\n\n```\n\n"
                 "FINAL THEOREM BODY:\n```lean4\n"
                 "theorem main : A = A := by\n  rfl\n```"

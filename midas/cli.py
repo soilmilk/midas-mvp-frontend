@@ -207,6 +207,7 @@ def cmd_replay(args):
         check_filled_placeholder,
         check_structure,
         declared_names,
+        exploration_sorry_violations,
         extract_header,
         extract_placeholder_info,
     )
@@ -242,10 +243,14 @@ def cmd_replay(args):
     prelude = config.lean_prelude
     context = open(os.path.join(root, "input", "context.lean")).read()
     accepted = []
+    previous_body = open(os.path.join(root, "input", "body_initial.lean")).read()
     for s in range(1, args.step):
         dp = os.path.join(p.accepted_ps(s), "declarations.lean")
         if os.path.exists(dp):
             accepted.append(open(dp).read())
+        bp = os.path.join(p.accepted_ps(s), "body.lean")
+        if os.path.exists(bp):
+            previous_body = open(bp).read()
 
     declarations_path = os.path.join(lad, "declarations.lean")
     body_path = os.path.join(lad, "body.lean")
@@ -302,6 +307,12 @@ def cmd_replay(args):
     structure = check_structure(
         cand_decl, cand_body, header, previous_names
     )
+    if attempt_kind == "exploration":
+        sorry_violations = exploration_sorry_violations(
+            previous_body, cand_body
+        )
+        structure.violations.extend(sorry_violations)
+        structure.ok = structure.ok and not sorry_violations
     if attempt_kind != "exploration" and body_contains_sorry(cand_body):
         structure.violations.append("final theorem body contains `sorry`")
         structure.ok = False

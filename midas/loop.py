@@ -6,7 +6,7 @@ from __future__ import annotations
 import os, re, time
 from typing import List, Optional
 
-from .models import (ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
+from .models import (AcceptedKnowledge, ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
                      RunStats, LLMUsageStats, CheckReport, CompileJson, Diagnostic,
                      attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
@@ -14,7 +14,9 @@ from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgen
                      TranslationRepairContext)
 from .parser import parse_reasoning_action, parse_translator_output
 from .structure import (check_filled_placeholder, check_structure,
-                        body_contains_sorry, declared_names)
+                        body_contains_sorry, declared_names,
+                        exploration_progress_violations,
+                        exploration_sorry_violations)
 from .verifier_client import make_verifier, build_compile_json
 from .reconstructor import RenderedSource, SourceRegion, render_source
 from .artifacts import Paths, LeanArtifactLogger, RunEventLogger, StateManager
@@ -493,8 +495,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
     accepted_decls: List[str] = []
     latest_body = prob.body_initial
-    informal_progress = ""
-
     # ---- main loop (§18) ----
     while state.status == "running":
         lim = limits.exceeded(state)
@@ -533,10 +533,11 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 return finish()
             reasoning_prompt = reasoning.build_prompt(
                 prob.informal_problem,
-                informal_progress,
+                state.current_knowledge,
                 problem_mode=prob.config.problem_mode,
                 failure_feedback=reasoning_feedback,
                 failed_next_step=failed_next_step,
+                future_ideas=state.future_ideas,
             )
             ic.reasoning_prompt_path = logger.write_reasoning_prompt(
                 i, j, reasoning_prompt
@@ -598,7 +599,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_feedback = (
                     "The previous response was not a valid action: "
                     f"{action.error}. Return one action with non-empty NEXT STEP and PROOF, "
-                    "and an exact IS_FINAL_STEP Boolean."
+                    "a STEP USEFULNESS rating, an exact IS_FINAL_STEP "
+                    "Boolean, and non-empty IDEAS FOR THE FUTURE as the final section."
                 )
                 failed_next_step = ""
                 events.event(
@@ -608,16 +610,20 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 statemgr.save(state)
                 continue
 
+            ic.step_usefulness = action.step_usefulness
+            ic.future_ideas = action.future_ideas
             informal_candidate = action.informal_step
             attempt_kind = attempt_kind_for(
                 problem_mode, bool(action.is_final_step)
             )
             events.event(
                 f"Reasoner action accepted: kind={attempt_kind}, "
+                f"usefulness={action.step_usefulness}, "
                 f"next_step={action.next_step[:200]!r}",
                 indent=3,
             )
             candidate_accepted = False
+            candidate_rejection_feedback = ""
             compiler_feedback = ""
             repair_context = None
             for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
@@ -749,6 +755,36 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     )
                     statemgr.save(state); continue
 
+                if pr.rejected:
+                    la.status = "translator_rejected_step"
+                    la.translator_rejection_kind = pr.rejection_kind
+                    la.translator_rejection_reason = pr.rejection_reason
+                    cj = CompileJson(
+                        attempt_status="translator_rejected_step",
+                        attempt_kind=attempt_kind,
+                        translator_rejection_kind=pr.rejection_kind,
+                        translator_rejection_reason=pr.rejection_reason,
+                    )
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t, None, None, cj
+                    )
+                    bump("translator_rejected_step")
+                    last_error = (
+                        f"translator rejected step ({pr.rejection_kind}): "
+                        f"{pr.rejection_reason}"
+                    )
+                    candidate_rejection_feedback = (
+                        f"The translator rejected this step as {pr.rejection_kind}: "
+                        f"{pr.rejection_reason}"
+                    )
+                    events.event(
+                        f"Translator rejected candidate as {pr.rejection_kind}; "
+                        "skipping remaining translation attempts",
+                        indent=4, console=True,
+                    )
+                    statemgr.save(state)
+                    break
+
                 dp, pp, bp = logger.write_parsed_translation(
                     i, j, k, pr.declarations, pr.body,
                     placeholder=pr.placeholder,
@@ -760,6 +796,17 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
                 prev_names = _names(accepted_decls)
                 sr = check_structure(pr.declarations, pr.body, header, prev_names)
+                sorry_violations = []
+                progress_violations = []
+                if attempt_kind == "exploration":
+                    sorry_violations = exploration_sorry_violations(
+                        latest_body, pr.body
+                    )
+                    progress_violations = exploration_progress_violations(
+                        latest_body, pr.declarations, pr.body
+                    )
+                    sr.violations.extend(sorry_violations + progress_violations)
+                    sr.ok = sr.ok and not sorry_violations and not progress_violations
                 if attempt_kind != "exploration" and body_contains_sorry(pr.body):
                     sr.violations.append("final theorem body contains `sorry`")
                     sr.ok = False
@@ -774,6 +821,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         "placeholder_format_failed"
                         if attempt_kind == "hard_finalization"
                         and any("placeholder" in v for v in sr.violations)
+                        else "unproved_body_fact"
+                        if attempt_kind == "exploration" and sorry_violations
+                        else "no_formal_progress"
+                        if attempt_kind == "exploration" and progress_violations
                         else "format_failed"
                     )
                     cj = build_compile_json(
@@ -787,6 +838,10 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     la.status = status
                     if status == "placeholder_format_failed":
                         bump("placeholder_format_failed")
+                    elif status == "unproved_body_fact":
+                        bump("unproved_body_fact")
+                    elif status == "no_formal_progress":
+                        bump("no_formal_progress")
                     else:
                         bump("changed_theorem_statement"
                              if any("header" in v for v in sr.violations)
@@ -795,6 +850,22 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         "Structure check failed:\n"
                         + "\n".join(f"- {v}" for v in sr.violations)
                     )
+                    if status == "unproved_body_fact":
+                        last_error = structure_feedback
+                        candidate_rejection_feedback = (
+                            "The translator tried to justify a new fact with `sorry` "
+                            "inside the theorem body. The candidate was rejected before "
+                            "compilation; propose a smaller or different step."
+                        )
+                        events.event(
+                            "Unproved theorem-body fact detected; skipping compilation "
+                            "and remaining translation attempts",
+                            indent=4, console=True,
+                        )
+                        for violation in sr.violations:
+                            events.event(violation, indent=5)
+                        statemgr.save(state)
+                        break
                     compiler_feedback = structure_feedback
                     repair_context = TranslationRepairContext(
                         failed_check="structure_check",
@@ -972,9 +1043,11 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     logger.copy_accepted(i, pr.declarations, pr.body)
                     accepted_decls.append(pr.declarations); latest_body = pr.body
                     state.stats.accepted_proof_steps += 1
-                    knowledge = action.next_step
-                    state.current_knowledge.append(knowledge)
-                    informal_progress += f"\n- {knowledge}"
+                    state.current_knowledge.append(AcceptedKnowledge(
+                        statement=action.next_step,
+                        step_usefulness=action.step_usefulness,
+                    ))
+                    state.future_ideas = action.future_ideas
                     candidate_accepted = step_accepted = True
                     events.event(
                         f"Proof step {i} accepted from candidate {j}, attempt {k}",
@@ -1053,6 +1126,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                             state.placeholder_status = "filled"
                         la.status = "final_success"; ic.status = "accepted"; ps.status = "final_success"
                         state.status = "final_success"; state.stats.accepted_proof_steps += 1
+                        state.future_ideas = action.future_ideas
                         return finish()
                     else:
                         status = (
@@ -1095,11 +1169,13 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 break
             ic.status = "abandoned"
             events.event(
-                f"Candidate {j} abandoned after exhausting translation attempts",
+                (f"Candidate {j} abandoned after translator rejection"
+                 if candidate_rejection_feedback else
+                 f"Candidate {j} abandoned after exhausting translation attempts"),
                 indent=2, console=True,
             )
             failed_next_step = action.next_step
-            reasoning_feedback = (
+            reasoning_feedback = candidate_rejection_feedback or (
                 "The step above could not be verified due to being too complex or incorrect. Propose a smaller, "
                 "more direct, or differently formulated step that is translatable to Lean 4. Do not repeat it unchanged."
                 if failed_next_step else

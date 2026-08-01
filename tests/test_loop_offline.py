@@ -48,14 +48,35 @@ def fail_translation_after_inspection(prompt):
 
 def T(decls, body, final=False):
     heading = "FINAL THEOREM BODY" if final else "UPDATED THEOREM BODY"
-    return f"reasoning...\n\nNEW DECLARATIONS:\n```lean4\n{decls}\n```\n\n{heading}:\n\n```\n{body}\n```\n"
+    return (f"INTERMEDIATE REASONING:\nTranslate the exact claim.\n\n"
+            f"PLAN:\nProve the declaration and update the body.\n\n"
+            f"NEW DECLARATIONS:\n```lean4\n{decls}\n```\n\n"
+            f"{heading}:\n\n```\n{body}\n```\n")
+
+def R(next_step, proof, final=False, idea="[High] Continue the proof.", usefulness="High"):
+    return (
+        f"NEXT STEP:\n{next_step}\n\n"
+        f"PROOF:\n{proof}\n\n"
+        f"STEP USEFULNESS:\n{usefulness}\n\n"
+        f"IS_FINAL_STEP: {'True' if final else 'False'}\n\n"
+        f"IDEAS FOR THE FUTURE:\n{idea}"
+    )
 
 reasoning = [
     fail_reasoning_after_inspection,                                                # candidate1: failed call
-    "NEXT STEP:\nShow both of these facts:\nA = 5 and B = 5.\n\nPROOF:\nEvaluate both expressions.\n\nIS_FINAL_STEP: False",
-    "NEXT STEP:\nShow A = 5.\n\nPROOF:\nA is 2+3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
-    "NEXT STEP:\nShow B = 5.\n\nPROOF:\nB is 15/3 which evaluates to 5.\n\nIS_FINAL_STEP: False",
-    "NEXT STEP:\nCombine to finish.\n\nPROOF:\nRewrite with A=5 and B=5.\n\nIS_FINAL_STEP: True",
+    R("Show both of these facts:\nA = 5 and B = 5.", "Evaluate both expressions.",
+      idea="[Low] Failed candidate roadmap must not persist."),
+    R("Show A = 5.", "A is 2+3 which evaluates to 5.",
+      idea="[High] Prove B = 5 next.", usefulness="Low"),
+    R("Assume B = 5 locally.", "Insert the claim as a local fact.",
+      idea="[Low] A cheating roadmap must not persist."),
+    R("Show B = 5 in one large automation call.",
+      "Ask automation to discover the entire proof.",
+      idea="[Low] This rejected roadmap must not persist."),
+    R("Show B = 5.", "B is 15/3 which evaluates to 5.",
+      idea="[High] Combine both equalities."),
+    R("Combine to finish.", "Rewrite with A=5 and B=5.", final=True,
+      idea="None — the theorem is complete"),
 ]
 translation = [
     T("theorem broken : A = 5 := by exact missing_identifier",
@@ -65,8 +86,15 @@ translation = [
     fail_translation_after_inspection,                                     # call failure must still be logged
     T("-- A evaluates to 5.\ntheorem A_eq : A = 5 := by decide",
       "theorem main : f A = f B := by\n  decide"),                                  # candidate2: non-final CLOSED, still exploration
+    T("", "theorem main : f A = f B := by\n  have hB : B = 5 := by sorry\n  sorry"),
+    ("INTERMEDIATE REASONING:\nThe claim is valid but looks tedious.\n\n"
+     "TRANSLATION REJECTED:\nKIND: HARD_TO_FORMALIZE\nREASON:\n"
+     "I do not know which automation lemma to use."),
+    ("INTERMEDIATE REASONING:\nThe broad claim does not follow as stated.\n\n"
+     "TRANSLATION REJECTED:\nKIND: MISSING_ASSUMPTION\nREASON:\n"
+     "Use a direct evaluation lemma instead of unsupported broad automation."),
     T("-- B evaluates to 5.\ntheorem B_eq : B = 5 := by decide",
-      "theorem main : f A = f B := by\n  have hA : A = 5 := A_eq\n  have hB : B = 5 := B_eq\n  sorry"),  # step2: OPEN
+      "theorem main : f A = f B := by\n  decide"),  # step2: remains closed
     T("-- Combine.\ntheorem key : f A = f B := by rw [A_eq, B_eq]",
       "theorem main : f A = f B := by\n  exact key",
       final=True),                                                                  # step3: final_success
@@ -159,7 +187,14 @@ Second line of the proposition.
 PROOF:
 The proof.
 
+STEP USEFULNESS:
+Medium
+This proposition may support the proof.
+
 IS_FINAL_STEP: False
+
+IDEAS FOR THE FUTURE:
+[Medium] Try rewriting with it.
 """
 checks.append(("missing NEXT STEP is rejected",
                not parse_reasoning_action("only reasoning", "easy").ok))
@@ -215,6 +250,8 @@ if os.path.exists(candidate3_prompt):
                    "Evaluate both expressions." not in prompt))
     checks.append(("retry prompt asks not to repeat the step",
                    "Do not repeat it unchanged." in prompt))
+    checks.append(("failed candidate roadmap does not persist",
+                   "Failed candidate roadmap must not persist." not in prompt))
 else:
     checks.append(("candidate3 reasoning prompt written", False))
 failed_call_compile = os.path.join(failed_call_dir, "compile.json")
@@ -255,6 +292,98 @@ st = StateManager.load(root)
 inv = all(sum(1 for c in s.informal_candidates if c.status == "accepted") == 1
           for s in st.proof_steps if s.status in ("accepted", "final_success"))
 checks.append(("invariant: 1 accepted candidate per accepted step", inv))
+step2_prompt = open(os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_002",
+    "informal_candidate_001", "reasoning_prompt.md",
+)).read()
+step2_retry_prompt = open(os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_002",
+    "informal_candidate_002", "reasoning_prompt.md",
+)).read()
+step2_rejection_prompt = open(os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_002",
+    "informal_candidate_003", "reasoning_prompt.md",
+)).read()
+step3_prompt = open(os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_003",
+    "informal_candidate_001", "reasoning_prompt.md",
+)).read()
+step1_translator_prompt = open(os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_001",
+    "informal_candidate_003", "lean4_attempt_002", "translator_prompt.md",
+)).read()
+checks.append(("accepted roadmap appears in the next prompt",
+               "[High] Prove B = 5 next." in step2_prompt))
+checks.append(("accepted usefulness appears with proved progress",
+               "Step 1 (usefulness: Low):\nShow A = 5." in step2_prompt))
+rejected_attempt_dir = os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_002",
+    "informal_candidate_002", "lean4_attempt_002",
+)
+rejected_candidate_dir = os.path.dirname(rejected_attempt_dir)
+difficulty_attempt_dir = os.path.join(
+    rejected_candidate_dir, "lean4_attempt_001",
+)
+difficulty_compile = json.load(open(os.path.join(
+    difficulty_attempt_dir, "compile.json",
+)))
+rejected_compile = json.load(open(os.path.join(
+    rejected_attempt_dir, "compile.json",
+)))
+checks.append(("difficulty rejection is retried as a parse error",
+               difficulty_compile["attempt_status"] == "parse_error" and
+               os.path.exists(rejected_attempt_dir)))
+checks.append(("translator rejection short-circuits without Lean inputs",
+               rejected_compile["attempt_status"] == "translator_rejected_step" and
+               rejected_compile["translator_rejection_kind"] ==
+               "MISSING_ASSUMPTION" and
+               not os.path.exists(os.path.join(
+                   rejected_attempt_dir, "declaration_check_input.lean")) and
+               not os.path.exists(os.path.join(
+                   rejected_candidate_dir, "lean4_attempt_003"))))
+checks.append(("reasoner receives translator rejection feedback",
+               "MISSING_ASSUMPTION" in step2_rejection_prompt and
+               "Use a direct evaluation lemma" in step2_rejection_prompt and
+               "Show B = 5 in one large automation call."
+               in step2_rejection_prompt))
+checks.append(("rejected roadmap does not replace accepted roadmap",
+               "[High] Prove B = 5 next." in step2_rejection_prompt and
+               "This rejected roadmap must not persist."
+               not in step2_rejection_prompt))
+cheating_attempt_dir = os.path.join(
+    root, "artifacts", "proof_steps", "proof_step_002",
+    "informal_candidate_001", "lean4_attempt_001",
+)
+cheating_compile = json.load(open(os.path.join(
+    cheating_attempt_dir, "compile.json",
+)))
+checks.append(("nested sorry candidate fails before compilation",
+               cheating_compile["attempt_status"] == "unproved_body_fact" and
+               not os.path.exists(os.path.join(
+                   cheating_attempt_dir, "declaration_check_input.lean")) and
+               "tried to justify a new fact with `sorry`" in step2_retry_prompt))
+checks.append(("new accepted roadmap replaces the older roadmap",
+               "[High] Combine both equalities." in step3_prompt and
+               "[High] Prove B = 5 next." not in step3_prompt))
+checks.append(("proved progress remains chronological and annotated",
+               step3_prompt.index("Step 1 (usefulness: Low):\nShow A = 5.") <
+               step3_prompt.index("Step 2 (usefulness: High):\nShow B = 5.")))
+checks.append(("translator excludes planning metadata",
+               "STEP USEFULNESS" not in step1_translator_prompt and
+               "IDEAS FOR THE FUTURE" not in step1_translator_prompt))
+checks.append(("state stores candidate metadata and final roadmap",
+               st.proof_steps[0].informal_candidates[2].step_usefulness == "Low" and
+               st.proof_steps[0].informal_candidates[2].future_ideas ==
+               "[High] Prove B = 5 next." and
+               st.future_ideas == "None — the theorem is complete"))
+checks.append(("state stores accepted statements with usefulness",
+               [(item.statement, item.step_usefulness)
+                for item in st.current_knowledge] ==
+               [("Show A = 5.", "Low"), ("Show B = 5.", "High")]))
+checks.append(("state stores translator rejection metadata",
+               st.proof_steps[1].informal_candidates[1]
+               .lean_translation_attempts[1].translator_rejection_kind ==
+               "MISSING_ASSUMPTION"))
 usage = st.stats.llm_usage
 checks.append(("offline usage accounts calls without inventing cost",
                usage.total.calls == st.stats.total_llm_calls and

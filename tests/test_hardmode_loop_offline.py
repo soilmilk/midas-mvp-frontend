@@ -27,10 +27,14 @@ def action(next_step: str, proof: str, final=False, answer=None) -> str:
         "INTERMEDIATE REASONING:\nChoose the next useful fact.\n\n"
         f"NEXT STEP:\n{next_step}\n\n"
         f"PROOF:\n{proof}\n\n"
+        "STEP USEFULNESS:\nHigh\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}"
     )
     if answer is not None:
         raw += f"\n\nANSWER:\n{answer}"
+    raw += "\n\nIDEAS FOR THE FUTURE:\n" + (
+        "None — the theorem is complete" if final else "[High] Continue from this fact."
+    )
     return raw
 
 

@@ -43,7 +43,9 @@ _DECL_NAME = re.compile(
 )
 
 _THM_DECL = re.compile(r"(?m)^\s*theorem\s+[A-Za-z_]")
+_PROVED_DECL = re.compile(r"(?m)^\s*(?:theorem|lemma)\s+[A-Za-z_]")
 _SORRY = re.compile(r"\bsorry\b")
+_PROOF_HOLE = re.compile(r"\b(?:sorry|admit)\b")
 _PLACEHOLDER_DECL = re.compile(
     r"(?m)^[ \t]*(?:(?P<modifier>noncomputable)[ \t]+)?"
     r"(?P<kind>def|abbrev)[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_.']*)\b")
@@ -230,8 +232,8 @@ def check_structure(declarations: str, body: str, header: str,
             v.append(f"{region_name} contains forbidden top-level command: {command}")
 
     # §12: declarations must not contain sorry
-    if _SORRY.search(declarations or ""):
-        v.append("declarations contain `sorry`")
+    if _PROOF_HOLE.search(declarations or ""):
+        v.append("declarations contain `sorry` or `admit`")
 
     # §12: declarations must not repeat previously accepted names
     prev = set(previous_accepted_names)
@@ -258,4 +260,47 @@ def check_structure(declarations: str, body: str, header: str,
 
 
 def body_contains_sorry(body: str) -> bool:
-    return _SORRY.search(body or "") is not None
+    return _PROOF_HOLE.search(body or "") is not None
+
+
+def exploration_sorry_violations(previous_body: str,
+                                 candidate_body: str) -> List[str]:
+    """Reject new or nested proof holes while allowing one inherited final hole."""
+    previous = _mask_comments(previous_body or "")
+    candidate = _mask_comments(candidate_body or "")
+    previous_count = len(_PROOF_HOLE.findall(previous))
+    candidate_count = len(_PROOF_HOLE.findall(candidate))
+    violations = []
+    if candidate_count > previous_count:
+        violations.append(
+            "exploration theorem body introduces additional `sorry` holes "
+            f"({previous_count} -> {candidate_count})"
+        )
+    if candidate_count > 1:
+        violations.append(
+            "exploration theorem body may retain at most one unresolved `sorry`"
+        )
+    if candidate_count == 1 and not re.search(
+        r"(?m)^[ \t]*sorry[ \t]*\Z", candidate.rstrip()
+    ):
+        violations.append(
+            "the only permitted exploration `sorry` is the final standalone "
+            "tactic of the target theorem"
+        )
+    return violations
+
+
+def exploration_progress_violations(previous_body: str, declarations: str,
+                                    candidate_body: str) -> List[str]:
+    """Reject definition-only transactions that make no theorem-body progress."""
+    previous_tokens = _mask_comments(previous_body or "").split()
+    candidate_tokens = _mask_comments(candidate_body or "").split()
+    has_proved_proposition = _PROVED_DECL.search(
+        _mask_comments(declarations or "")
+    ) is not None
+    if previous_tokens == candidate_tokens and not has_proved_proposition:
+        return [
+            "exploration makes no formal proof progress: the theorem body is "
+            "unchanged and NEW DECLARATIONS contains no proved theorem or lemma"
+        ]
+    return []

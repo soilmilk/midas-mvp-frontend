@@ -226,15 +226,26 @@ Example `config.json`:
 
 ### Hard Mode protocol and transaction
 
-Every new reasoner action includes non-empty `NEXT STEP` and `PROOF` fields plus an exact
-`IS_FINAL_STEP: True` or `IS_FINAL_STEP: False`.
+Every new reasoner action includes non-empty `NEXT STEP`, `PROOF`, `STEP USEFULNESS`, and
+`IDEAS FOR THE FUTURE` fields plus an exact `IS_FINAL_STEP: True` or
+`IS_FINAL_STEP: False`. Usefulness is exactly `High`, `Medium`, or `Low` on its own line. It rates
+how likely the result is to belong to a viable complete solution, not how difficult, novel, or
+large the step is. Future ideas form a rolling, unproved roadmap; only the roadmap from an
+accepted step is passed to the next reasoner call.
+
+Every accepted rating is shown beside its verified `NEXT STEP` in later reasoner prompts. `High`
+means the result is expected to be used directly or required by the current plan, even when it is
+a tiny calculation. `Medium` marks credible but uncertain support. `Low` marks exploratory,
+speculative, redundant, or currently unconnected work. Ratings describe relevance when proposed;
+later reasoners may reassess them and ignore Low-rated facts as the roadmap changes. All listed
+steps remain formally verified regardless of rating.
 
 - Easy Mode never uses an `ANSWER` field.
 - A non-final Hard Mode action forbids `ANSWER`.
 - A final Hard Mode action requires one non-empty English/mathematical `ANSWER`; it is not Lean
   source and is not persisted as an accepted answer branch.
 
-Every action starts with:
+A non-final action, and any Easy Mode action, uses:
 
 ```text
 INTERMEDIATE REASONING:
@@ -246,14 +257,25 @@ NEXT STEP:
 PROOF:
 ...
 
+STEP USEFULNESS:
+High | Medium | Low
+
 IS_FINAL_STEP: True | False
+
+IDEAS FOR THE FUTURE:
+<non-empty roadmap; this is always the final section>
 ```
 
-A final Hard action uses `IS_FINAL_STEP: True` and appends:
+A final Hard action instead ends with:
 
 ```text
+IS_FINAL_STEP: True
+
 ANSWER:
 <concrete answer in English or mathematical notation>
+
+IDEAS FOR THE FUTURE:
+None — the theorem is complete
 ```
 
 Exploration translations contain `NEW DECLARATIONS` and a complete `UPDATED THEOREM BODY`.
@@ -272,6 +294,27 @@ Exploration:       NEW DECLARATIONS → UPDATED THEOREM BODY
 Easy final:        NEW DECLARATIONS → FINAL THEOREM BODY
 Hard final:        NEW DECLARATIONS → FILLED PLACEHOLDER → FINAL THEOREM BODY
 ```
+
+Instead of a Lean transaction, the translator may reject an unsuitable informal candidate:
+
+```text
+INTERMEDIATE REASONING:
+<check the exact claim against the hypotheses and formal context>
+
+TRANSLATION REJECTED:
+KIND: MATHEMATICALLY_INCORRECT
+REASON:
+<English explanation identifying the precise defect>
+```
+
+The other accepted kinds are `MISSING_ASSUMPTION` and `INCOMPATIBLE_WITH_CONTEXT`.
+`HARD_TO_FORMALIZE` is deliberately not accepted: uncertainty about library names, tedious
+algebra, or missing infrastructure must produce a concrete Lean transaction so compiler feedback
+can guide retries. Every outcome starts with non-empty intermediate reasoning; Lean transactions
+also require a non-empty plan. A valid rejection skips compilation and all remaining translation
+attempts for that informal candidate, then returns control to the reasoner. Exploration bodies may
+retain only one inherited, final standalone `sorry`; adding or nesting theorem-body holes rejects
+the candidate before compilation.
 
 Every section contains one complete `lean4` code fence. The theorem sections contain the entire
 target theorem and preserve its stored header byte-for-byte.

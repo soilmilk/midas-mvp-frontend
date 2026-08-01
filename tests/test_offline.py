@@ -34,7 +34,11 @@ context = R("context.lean")
 body_initial = R("body_initial.lean")
 
 # ---- canned translator outputs (§10 format: prose + NEW DECLARATIONS + UPDATED THEOREM BODY) ----
-STEP1 = """Reasoning: first evaluate the recursive object A.
+STEP1 = """INTERMEDIATE REASONING:
+First evaluate the recursive object A.
+
+PLAN:
+Prove A_eq and add it to the theorem body.
 
 NEW DECLARATIONS:
 ```lean4
@@ -50,7 +54,11 @@ theorem main : f A = f B := by
   sorry
 ```
 """
-STEP2 = """Now the closed-form object B.
+STEP2 = """INTERMEDIATE REASONING:
+Now handle the closed-form object B.
+
+PLAN:
+Prove B_eq and add it to the theorem body.
 
 NEW DECLARATIONS:
 ```lean4
@@ -67,7 +75,11 @@ theorem main : f A = f B := by
   sorry
 ```
 """
-STEP3 = """Combine the two and finish.
+STEP3 = """INTERMEDIATE REASONING:
+Combine the two verified equalities and finish.
+
+PLAN:
+Prove key and close the theorem with it.
 
 NEW DECLARATIONS:
 ```lean4
@@ -103,32 +115,39 @@ row("malformed output -> format_failed", (not pf.ok), pf.error)
 
 # ---- strict empty-declarations contract ----
 _BODY = "```lean4\ntheorem main : True := by trivial\n```"
-_EMPTY_DECLARATIONS = f"""NEW DECLARATIONS:
+_TRANSLATOR_PREAMBLE = """INTERMEDIATE REASONING:
+The target is direct.
+
+PLAN:
+Return the required theorem body.
+
+"""
+_EMPTY_DECLARATIONS = _TRANSLATOR_PREAMBLE + f"""NEW DECLARATIONS:
 ```lean4
 ```
 
 UPDATED THEOREM BODY:
 {_BODY}
 """
-_EMPTY_UNLABELED_DECLARATIONS = f"""NEW DECLARATIONS:
+_EMPTY_UNLABELED_DECLARATIONS = _TRANSLATOR_PREAMBLE + f"""NEW DECLARATIONS:
 ```
 ```
 
 UPDATED THEOREM BODY:
 {_BODY}
 """
-_NONE_DECLARATIONS = f"""NEW DECLARATIONS:
+_NONE_DECLARATIONS = _TRANSLATOR_PREAMBLE + f"""NEW DECLARATIONS:
 (none)
 
 UPDATED THEOREM BODY:
 {_BODY}
 """
-_MISSING_DECLARATIONS_FENCE = f"""NEW DECLARATIONS:
+_MISSING_DECLARATIONS_FENCE = _TRANSLATOR_PREAMBLE + f"""NEW DECLARATIONS:
 
 UPDATED THEOREM BODY:
 {_BODY}
 """
-_EXTRA_DECLARATIONS_TEXT = f"""NEW DECLARATIONS:
+_EXTRA_DECLARATIONS_TEXT = _TRANSLATOR_PREAMBLE + f"""NEW DECLARATIONS:
 No declarations are needed.
 ```lean4
 ```
@@ -162,7 +181,8 @@ repair_errors = [
                message="Unknown identifier missing_two"),
 ]
 located = _render_repair_diagnostics(repair_errors, submitted, repair_decls, repair_body)
-previous_raw = ("INTERMEDIATE REASONING:\nold reasoning\n\nNEW DECLARATIONS:\n```lean4\n"
+previous_raw = ("INTERMEDIATE REASONING:\nold reasoning\n\n"
+                "PLAN:\nrepair both errors\n\nNEW DECLARATIONS:\n```lean4\n"
                 + repair_decls + "\n```\n\nUPDATED THEOREM BODY:\n```lean4\n"
                 + repair_body + "\n```")
 repair = TranslationRepairContext("body_check", previous_raw, repair_decls, repair_body, located)

@@ -8,12 +8,24 @@ from .models import AttemptKind
 
 
 _ACTION_HEADING = re.compile(
-    r"(?m)^[ \t]*(NEXT STEP|PROOF|IS_FINAL_STEP|ANSWER):[ \t]*(.*)$"
+    r"(?m)^[ \t]*(NEXT STEP|PROOF|STEP USEFULNESS|IS_FINAL_STEP|ANSWER|"
+    r"IDEAS FOR THE FUTURE):[ \t]*(.*)$"
 )
 _TRANSLATOR_HEADING = re.compile(
     r"(?m)^[ \t]*(NEW DECLARATIONS|UPDATED THEOREM BODY|"
     r"FINAL THEOREM BODY|FILLED PLACEHOLDER):[ \t]*$"
 )
+_TRANSLATOR_PREAMBLE_HEADING = re.compile(
+    r"(?m)^[ \t]*(INTERMEDIATE REASONING|PLAN):[ \t]*(.*)$"
+)
+_TRANSLATOR_REJECTION_HEADING = re.compile(
+    r"(?m)^[ \t]*(TRANSLATION REJECTED|KIND|REASON):[ \t]*(.*)$"
+)
+TRANSLATOR_REJECTION_KINDS = {
+    "MATHEMATICALLY_INCORRECT",
+    "MISSING_ASSUMPTION",
+    "INCOMPATIBLE_WITH_CONTEXT",
+}
 _SECTION_FENCE = re.compile(
     r"[ \t\r\n]*```(?:lean4)?[ \t]*\r?\n(.*?)```[ \t\r\n]*",
     re.DOTALL,
@@ -26,6 +38,8 @@ class ReasoningAction:
     informal_step: str = ""
     next_step: str = ""
     proof: str = ""
+    step_usefulness: str = ""
+    future_ideas: str = ""
     is_final_step: Optional[bool] = None
     answer: Optional[str] = None
     error: str = ""
@@ -37,11 +51,30 @@ class ParseResult:
     declarations: Optional[str]
     body: Optional[str]
     placeholder: Optional[str] = None
+    rejected: bool = False
+    rejection_kind: str = ""
+    rejection_reason: str = ""
     error: str = ""
 
 
 def _action_error(message: str) -> ReasoningAction:
     return ReasoningAction(False, error=message)
+
+
+def _parse_translator_preamble(raw: str, expected: list[str]) -> str:
+    """Validate the reasoning that must precede a translation decision."""
+    matches = list(_TRANSLATOR_PREAMBLE_HEADING.finditer(raw or ""))
+    names = [match.group(1) for match in matches]
+    if names != expected:
+        return "translator output must begin with non-empty " + " and ".join(expected)
+    if raw[:matches[0].start()].strip():
+        return f"{expected[0]} must be the first translator section"
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        value = (match.group(2) + raw[match.end():end]).strip()
+        if not value:
+            return f"{match.group(1)} must be non-empty"
+    return ""
 
 
 def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
@@ -58,17 +91,24 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
         if len(found) != 1:
             return _action_error(f"duplicate {name} field")
 
-    required = ["NEXT STEP", "PROOF", "IS_FINAL_STEP"]
+    required = [
+        "NEXT STEP", "PROOF", "STEP USEFULNESS", "IS_FINAL_STEP",
+        "IDEAS FOR THE FUTURE",
+    ]
     for name in required:
         if name not in by_name:
             return _action_error(f"missing {name} field")
 
     ordered_names = [match.group(1) for match in matches]
-    expected = required + (["ANSWER"] if "ANSWER" in by_name else [])
+    expected = ["NEXT STEP", "PROOF", "STEP USEFULNESS", "IS_FINAL_STEP"]
+    if "ANSWER" in by_name:
+        expected.append("ANSWER")
+    expected.append("IDEAS FOR THE FUTURE")
     if ordered_names != expected:
         return _action_error(
-            "action fields must appear in order: NEXT STEP, PROOF, "
-            "IS_FINAL_STEP, then ANSWER when permitted"
+            "action fields must appear in order: NEXT STEP, PROOF, STEP "
+            "USEFULNESS, IS_FINAL_STEP, ANSWER when permitted, then IDEAS "
+            "FOR THE FUTURE"
         )
 
     values = {}
@@ -82,6 +122,12 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
         return _action_error("NEXT STEP must be non-empty")
     if not values["PROOF"]:
         return _action_error("PROOF must be non-empty")
+    usefulness_lines = values["STEP USEFULNESS"].splitlines()
+    usefulness = usefulness_lines[0].strip() if usefulness_lines else ""
+    if usefulness not in ("High", "Medium", "Low"):
+        return _action_error("STEP USEFULNESS must start with exactly High, Medium, or Low")
+    if not values["IDEAS FOR THE FUTURE"]:
+        return _action_error("IDEAS FOR THE FUTURE must be non-empty")
     flag = values["IS_FINAL_STEP"]
     if flag not in ("True", "False"):
         return _action_error("IS_FINAL_STEP must be exactly True or False")
@@ -95,12 +141,16 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
     if problem_mode == "hard" and is_final and not answer:
         return _action_error("a final Hard Mode action requires a non-empty ANSWER")
 
-    start = by_name["NEXT STEP"][0].start()
     return ReasoningAction(
         True,
-        informal_step=raw[start:].strip(),
+        informal_step=(
+            f"NEXT STEP:\n{values['NEXT STEP']}\n\n"
+            f"PROOF:\n{values['PROOF']}"
+        ),
         next_step=values["NEXT STEP"],
         proof=values["PROOF"],
+        step_usefulness=usefulness,
+        future_ideas=values["IDEAS FOR THE FUTURE"],
         is_final_step=is_final,
         answer=answer,
     )
@@ -123,6 +173,56 @@ def parse_translator_output(
     if attempt_kind not in schemas:
         return ParseResult(False, None, None, error=f"unknown attempt kind: {attempt_kind!r}")
 
+    rejection_matches = list(_TRANSLATOR_REJECTION_HEADING.finditer(raw or ""))
+    if rejection_matches:
+        preamble_error = _parse_translator_preamble(
+            raw[:rejection_matches[0].start()], ["INTERMEDIATE REASONING"]
+        )
+        if preamble_error:
+            return ParseResult(False, None, None, error=preamble_error)
+        rejection_names = [match.group(1) for match in rejection_matches]
+        if rejection_names != ["TRANSLATION REJECTED", "KIND", "REASON"]:
+            return ParseResult(
+                False, None, None,
+                error=("a translator rejection requires exactly TRANSLATION REJECTED, "
+                       "KIND, and REASON in that order"),
+            )
+        if list(_TRANSLATOR_HEADING.finditer(raw or "")):
+            return ParseResult(
+                False, None, None,
+                error="a translator rejection must not include Lean transaction sections",
+            )
+        rejection_values = {}
+        for index, match in enumerate(rejection_matches):
+            end = (rejection_matches[index + 1].start()
+                   if index + 1 < len(rejection_matches) else len(raw))
+            rejection_values[match.group(1)] = (
+                match.group(2) + raw[match.end():end]
+            ).strip()
+        if rejection_values["TRANSLATION REJECTED"]:
+            return ParseResult(
+                False, None, None,
+                error="TRANSLATION REJECTED heading must not contain a value",
+            )
+        rejection_kind = rejection_values["KIND"]
+        if rejection_kind not in TRANSLATOR_REJECTION_KINDS:
+            return ParseResult(
+                False, None, None,
+                error=("KIND must be exactly one of: "
+                       + ", ".join(sorted(TRANSLATOR_REJECTION_KINDS))),
+            )
+        rejection_reason = rejection_values["REASON"]
+        if not rejection_reason:
+            return ParseResult(
+                False, None, None,
+                error="REASON must be a non-empty English explanation",
+            )
+        return ParseResult(
+            True, None, None, rejected=True,
+            rejection_kind=rejection_kind,
+            rejection_reason=rejection_reason,
+        )
+
     matches = list(_TRANSLATOR_HEADING.finditer(raw or ""))
     names = [match.group(1) for match in matches]
     expected = schemas[attempt_kind]
@@ -139,6 +239,12 @@ def parse_translator_output(
                 + ", ".join(expected)
             ),
         )
+
+    preamble_error = _parse_translator_preamble(
+        raw[:matches[0].start()], ["INTERMEDIATE REASONING", "PLAN"]
+    )
+    if preamble_error:
+        return ParseResult(False, None, None, error=preamble_error)
 
     sections = {}
     for index, match in enumerate(matches):

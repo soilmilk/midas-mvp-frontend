@@ -8,7 +8,10 @@ sys.path.insert(0, ROOT)
 
 from midas.agents import TranslationAgent, TranslationRepairContext
 from midas.parser import parse_translator_output
-from midas.structure import check_structure, declared_names
+from midas.structure import (
+    check_structure, declared_names, exploration_progress_violations,
+    exploration_sorry_violations,
+)
 
 
 rows = []
@@ -58,6 +61,23 @@ hard_final = parse_translator_output(hard_final_raw, "hard_finalization")
 check("Hard final schema parses",
       hard_final.ok and hard_final.placeholder == PLACEHOLDER_FINAL)
 
+for rejection_kind in (
+    "MATHEMATICALLY_INCORRECT",
+    "MISSING_ASSUMPTION",
+    "INCOMPATIBLE_WITH_CONTEXT",
+):
+    rejected = parse_translator_output(
+        "INTERMEDIATE REASONING:\nThe claim has a precise defect.\n\n"
+        "TRANSLATION REJECTED:\n"
+        f"KIND: {rejection_kind}\n"
+        "REASON:\nUse a smaller intermediate lemma.",
+        "exploration",
+    )
+    check(f"{rejection_kind} rejection parses",
+          rejected.ok and rejected.rejected and
+          rejected.rejection_kind == rejection_kind and
+          rejected.rejection_reason == "Use a smaller intermediate lemma.")
+
 invalid = [
     ("exploration placeholder section",
      transaction([
@@ -91,6 +111,25 @@ invalid = [
          ("FILLED PLACEHOLDER", ""),
          ("FINAL THEOREM BODY", BODY_FINAL),
      ]), "hard_finalization"),
+    ("unknown rejection kind",
+     "INTERMEDIATE REASONING:\nChecked the claim.\n\n"
+     "TRANSLATION REJECTED:\nKIND: TOO_HARD\nREASON:\nNo.", "exploration"),
+    ("formalization difficulty rejection",
+     "INTERMEDIATE REASONING:\nThe claim is valid but tedious.\n\n"
+     "TRANSLATION REJECTED:\nKIND: HARD_TO_FORMALIZE\nREASON:\nNo.", "exploration"),
+    ("empty rejection reason",
+     "INTERMEDIATE REASONING:\nChecked the claim.\n\n"
+     "TRANSLATION REJECTED:\nKIND: MATHEMATICALLY_INCORRECT\nREASON:\n", "exploration"),
+    ("rejection missing reasoning",
+     "TRANSLATION REJECTED:\nKIND: MATHEMATICALLY_INCORRECT\nREASON:\nNo.", "exploration"),
+    ("rejection mixed with transaction",
+     "INTERMEDIATE REASONING:\nChecked the claim.\n\n"
+     "TRANSLATION REJECTED:\nKIND: MATHEMATICALLY_INCORRECT\nREASON:\nNo.\n\n"
+     + exploration_raw, "exploration"),
+    ("transaction missing reasoning and plan",
+     exploration_raw.split("NEW DECLARATIONS:", 1)[1].join(
+         ["NEW DECLARATIONS:", ""]
+     ), "exploration"),
 ]
 for label, raw, kind in invalid:
     parsed = parse_translator_output(raw, kind)
@@ -111,6 +150,31 @@ check("import injection becomes a structure error",
       not imports_structure.ok and
       any("forbidden top-level command: import" in v
           for v in imports_structure.violations))
+
+cheating_body = """theorem main : True := by
+  have difficult : True := by sorry
+  sorry"""
+check("exploration rejects added and nested sorry holes",
+      len(exploration_sorry_violations(BODY_OPEN, cheating_body)) >= 2)
+check("exploration also rejects admit",
+      exploration_sorry_violations(
+          BODY_OPEN, "theorem main : True := by\n  have h : True := by admit\n  sorry"
+      ) != [])
+check("exploration permits one inherited final hole",
+      exploration_sorry_violations(BODY_OPEN, BODY_OPEN) == [])
+check("exploration permits closing the inherited hole",
+      exploration_sorry_violations(BODY_OPEN, BODY_FINAL) == [])
+check("definition-only unchanged exploration is no progress",
+      exploration_progress_violations(
+          BODY_OPEN, "def unused : Nat := 1", BODY_OPEN
+      ) != [])
+check("proved declaration counts as exploration progress",
+      exploration_progress_violations(BODY_OPEN, DECL, BODY_OPEN) == [])
+check("a changed theorem body counts as exploration progress",
+      exploration_progress_violations(
+          BODY_OPEN, "def setup : Nat := 1",
+          "theorem main : True := by\n  have h : True := trivial\n  sorry",
+      ) == [])
 
 noncomputable_declarations = (
     "noncomputable def helperValue : Nat := 5\n\n"
@@ -185,6 +249,17 @@ check("Hard exploration requests no placeholder code section",
       "FILLED PLACEHOLDER:\n```lean4" not in hard_exploration_prompt)
 check("Hard exploration allows open theorem body",
       "it may contain `sorry`" in hard_exploration_prompt)
+check("translator prompt limits rejection to mathematical defects",
+      "KIND: <MATHEMATICALLY_INCORRECT" in hard_exploration_prompt and
+      "HARD_TO_FORMALIZE is not a valid rejection" in hard_exploration_prompt)
+check("translator prompt requires reasoning before a decision",
+      "INTERMEDIATE REASONING and PLAN sections are mandatory" in
+      hard_exploration_prompt and
+      "library-lemma route and an unfold/algebra fallback" in
+      hard_exploration_prompt)
+check("translator prompt forbids local sorry facts",
+      "never use `sorry` or `admit` inside a local `have`"
+      in hard_exploration_prompt)
 
 hard_final_prompt = agent.build_prompt(
     **base,
