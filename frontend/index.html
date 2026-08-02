@@ -1,0 +1,585 @@
+<style>
+  :root{
+    --bg:#F4F0E7; --bg-2:#EBE5D8; --bg-facet:#EFE9DC;
+    --panel:rgba(255,254,250,.80); --panel-solid:#FDFBF6; --panel-raised:#F8F4EB;
+    --border:rgba(138,110,242,.17); --border-strong:rgba(138,110,242,.34);
+    --text:#211C16; --muted:#655E51; --faint:#9A9081;
+    --accent:#8A6EF2; --accent-2:#B29CFB; --accent-ink:#5B3ED6;
+    --glow:rgba(138,110,242,.26); --glow-strong:rgba(138,110,242,.42);
+    --good:#12A45E; --good-bg:rgba(18,164,94,.12); --good-bd:rgba(18,164,94,.30);
+    --warn:#B9781A; --warn-bg:rgba(185,120,26,.13); --warn-bd:rgba(185,120,26,.30);
+    --bad:#E23D63;  --bad-bg:rgba(226,61,99,.11);   --bad-bd:rgba(226,61,99,.28);
+    --shadow:0 18px 42px -24px rgba(92,68,28,.20),0 1px 4px -2px rgba(92,68,28,.13);
+    --sx-key:#7E63E8; --sx-type:#C4453E; --sx-name:#0E7C8B; --sx-num:#B9781A; --sx-com:#9A9081; --sx-sorry:#B9781A;
+    --sans:"Helvetica Neue","Helvetica","Inter","Arial",system-ui,-apple-system,sans-serif;
+    --mono:"SF Mono","JetBrains Mono","Cascadia Code",ui-monospace,"Menlo","Consolas",monospace;
+  }
+  /* Light ivory is the committed default (opens light for everyone); dark is opt-in via the toggle. */
+  :root[data-theme="light"]{
+    --bg:#F4F0E7; --bg-2:#EBE5D8; --bg-facet:#EFE9DC;
+    --panel:rgba(255,254,250,.80); --panel-solid:#FDFBF6; --panel-raised:#F8F4EB;
+    --border:rgba(138,110,242,.17); --border-strong:rgba(138,110,242,.34);
+    --text:#211C16; --muted:#655E51; --faint:#9A9081;
+    --accent:#8A6EF2; --accent-2:#B29CFB; --accent-ink:#5B3ED6;
+    --glow:rgba(138,110,242,.26); --glow-strong:rgba(138,110,242,.42);
+    --good:#12A45E; --good-bg:rgba(18,164,94,.12); --good-bd:rgba(18,164,94,.30);
+    --warn:#B9781A; --warn-bg:rgba(185,120,26,.13); --warn-bd:rgba(185,120,26,.30);
+    --bad:#E23D63;  --bad-bg:rgba(226,61,99,.11);   --bad-bd:rgba(226,61,99,.28);
+    --shadow:0 18px 42px -24px rgba(92,68,28,.20),0 1px 4px -2px rgba(92,68,28,.13);
+    --sx-key:#7E63E8; --sx-type:#C4453E; --sx-name:#0E7C8B; --sx-num:#B9781A; --sx-com:#9A9081; --sx-sorry:#B9781A;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0B0A10; --bg-2:#0E0C16; --bg-facet:#131020;
+    --panel:rgba(255,255,255,.035); --panel-solid:#15121F; --panel-raised:rgba(255,255,255,.06);
+    --border:rgba(167,139,250,.14); --border-strong:rgba(167,139,250,.30);
+    --text:#F3F1FB; --muted:#9C96B6; --faint:#6E6890;
+    --accent:#A78BFA; --accent-2:#C4B5FD; --accent-ink:#E4DBFF;
+    --glow:rgba(167,139,250,.38); --glow-strong:rgba(167,139,250,.58);
+    --good:#45D98A; --good-bg:rgba(69,217,138,.12); --good-bd:rgba(69,217,138,.28);
+    --warn:#E7A93E; --warn-bg:rgba(231,169,62,.12); --warn-bd:rgba(231,169,62,.30);
+    --bad:#FB6A85;  --bad-bg:rgba(251,106,133,.12); --bad-bd:rgba(251,106,133,.30);
+    --shadow:0 26px 60px -28px rgba(0,0,0,.78),0 0 0 1px rgba(167,139,250,.05);
+    --sx-key:#CBBEFF; --sx-type:#FF9E8A; --sx-name:#67E8C9; --sx-num:#F0C06A; --sx-com:#6E6890; --sx-sorry:#E7A93E;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0}
+  .app{
+    height:100vh; overflow:hidden; display:flex; flex-direction:column;
+    color:var(--text); font-family:var(--sans); -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(1000px 620px at 84% -10%, var(--glow) 0%, transparent 55%),
+      radial-gradient(760px 520px at 2% 108%, color-mix(in srgb,var(--accent) 20%,transparent) 0%, transparent 52%),
+      conic-gradient(from 210deg at 80% 84%, var(--bg-facet) 0deg, var(--bg) 90deg, var(--bg-2) 200deg, var(--bg-facet) 360deg),
+      var(--bg);
+    padding:12px;
+  }
+  .wrap{flex:1;min-height:0;display:flex;flex-direction:column;gap:11px;max-width:1440px;width:100%;margin:0 auto}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);
+    backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2)}
+  .pad{padding:14px 15px}
+  .grow{flex:1;min-height:0;display:flex;flex-direction:column}
+  .scroll{flex:1;min-height:0;overflow:auto}
+  .scroll::-webkit-scrollbar{width:8px;height:8px}
+  .scroll::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px}
+
+  .phead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+  .phead h2{font-size:12.5px;margin:0;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+  .phead .more{font:700 10.5px/1 var(--sans);color:var(--accent-2);letter-spacing:.02em;white-space:nowrap}
+  .pill{font:800 9px/1 var(--sans);letter-spacing:.09em;padding:5px 7px;border-radius:6px;white-space:nowrap;flex:none}
+  .pill.ok{color:var(--good);background:var(--good-bg);border:1px solid var(--good-bd)}
+  .pill.run{color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 14%,transparent);border:1px solid var(--accent)}
+  .pill.warn{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-bd)}
+  .pill.bad{color:var(--bad);background:var(--bad-bg);border:1px solid var(--bad-bd)}
+
+  /* ---------- header ---------- */
+  .top{display:flex;align-items:center;gap:12px;padding:9px 13px;flex:none;position:relative;z-index:40}
+  .brand{display:flex;align-items:center;gap:11px}
+  .mark{font:italic 800 46px/1 Georgia,"Times New Roman","Times",serif;color:var(--text);flex:none;transform:translateY(-2px)}
+  .brand h1{font-size:18px;margin:0;letter-spacing:.004em;font-weight:800;line-height:1.05}
+  .brand .tagline{display:block;font-size:9.5px;color:var(--muted);font-weight:600;letter-spacing:.02em;margin-top:3px;white-space:nowrap}
+
+  .selector{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;margin-left:6px;
+    background:var(--panel-raised);border:1px solid var(--border);border-radius:11px;padding:6px 11px;min-width:230px;position:relative;transition:.2s}
+  .selector:hover{border-color:var(--border-strong);box-shadow:0 0 0 3px var(--glow)}
+  .selector .tag{font:700 9.5px/1 var(--sans);letter-spacing:.1em;color:var(--accent-2);background:color-mix(in srgb,var(--accent) 16%,transparent);padding:5px 6px;border-radius:5px}
+  .selector .lbl{font-family:var(--mono);font-weight:700;font-size:12.5px}
+  .selector .lbl small{display:block;font-family:var(--sans);font-weight:600;font-size:9.5px;color:var(--faint);margin-top:1px}
+  .caret{margin-left:auto;color:var(--muted);transition:transform .2s}
+  .selector.open .caret{transform:rotate(180deg)}
+  .menu{position:absolute;top:calc(100% + 7px);left:0;right:0;z-index:50;background:var(--panel-solid);
+    border:1px solid var(--border-strong);border-radius:12px;box-shadow:var(--shadow);padding:5px;display:none;flex-direction:column;gap:2px}
+  .selector.open .menu{display:flex}
+  .opt{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;cursor:pointer;font-size:12px}
+  .opt:hover{background:var(--panel-raised)}
+  .opt code{font-family:var(--mono);font-weight:700;color:var(--accent-2);font-size:11px}
+  .opt .nm{color:var(--muted)}
+  .opt .ok{margin-left:auto;font:700 8px/1 var(--sans);letter-spacing:.08em;color:var(--good);background:var(--good-bg);border:1px solid var(--good-bd);padding:4px 5px;border-radius:4px}
+
+  .spacer{margin-left:auto}
+  .btn{display:inline-flex;align-items:center;gap:7px;font-family:var(--sans);font-weight:700;font-size:12px;
+    border-radius:11px;padding:8px 12px;cursor:pointer;border:1px solid var(--border);background:var(--panel-raised);color:var(--text);transition:.14s}
+  .btn:hover{border-color:var(--border-strong)}
+  .btn:active{transform:translateY(1px)}
+  .btn svg{width:15px;height:15px}
+  .btn.primary{border:none;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 8px 22px -10px var(--glow-strong),inset 0 1px 0 rgba(255,255,255,.25)}
+  .iconbtn{width:36px;height:36px;padding:0;justify-content:center}
+  .runstate{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:11.5px;border:1px solid var(--accent);border-radius:11px;padding:7px 12px;color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+  .runstate .dot{width:7px;height:7px;border-radius:50%;background:var(--accent-2);animation:ping 1.6s ease-out infinite}
+  @keyframes ping{0%{box-shadow:0 0 0 0 var(--glow-strong)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+  /* ---------- main grid ---------- */
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:346px minmax(0,1fr);gap:11px;position:relative;z-index:1}
+  .col{min-height:0;display:flex;flex-direction:column;gap:11px}
+
+  /* problem card */
+  .prob{display:flex;gap:14px;align-items:center}
+  .prob .eyebrow{font:800 9px/1 var(--sans);letter-spacing:.28em;color:var(--accent-2);margin-bottom:8px}
+  .prob .title{font-family:var(--mono);font-weight:800;font-size:23px;letter-spacing:-.02em;line-height:1.02;margin:0}
+  .prob .sub{color:var(--muted);font-size:11.5px;margin-top:7px;line-height:1.45}
+  .ring{position:relative;width:88px;height:88px;flex:none}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .num{font-family:var(--mono);font-weight:800;font-size:20px;letter-spacing:-.02em}
+  .ring .cap{font:700 7px/1 var(--sans);letter-spacing:.18em;color:var(--faint);margin-top:3px}
+  .prob .meta{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:5px;font:700 9.5px/1 var(--sans);color:var(--muted);border:1px solid var(--border);background:var(--panel-raised);padding:5px 7px;border-radius:6px}
+  .chip svg{width:11px;height:11px}
+  .chip b{color:var(--text)}
+
+  /* small stat tiles */
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .tile{padding:10px 11px;border-radius:12px;background:var(--panel-raised);border:1px solid var(--border);display:flex;flex-direction:column;gap:3px}
+  .tile .k{font:700 8px/1 var(--sans);letter-spacing:.12em;color:var(--faint)}
+  .tile .v{font-family:var(--mono);font-weight:800;font-size:18px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .tile .d{font-size:9.5px;font-weight:600;color:var(--muted)}
+  .tile .d b{color:var(--good)}
+
+  /* feed */
+  .feed{display:flex;flex-direction:column;gap:3px}
+  .row{display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:9px;transition:.15s}
+  .row:hover{background:var(--panel-raised)}
+  .row .id{font-family:var(--mono);font-size:10px;color:var(--faint);font-weight:700;width:28px}
+  .row .info{flex:1;min-width:0}
+  .row .info .a{font-family:var(--mono);font-size:11.5px;font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+  .row .info .b{font-size:9.5px;color:var(--faint);margin-top:2px;font-weight:600;overflow-wrap:anywhere}
+
+  /* ---------- relay ---------- */
+  .pipe{position:relative;padding:6px 4px 34px}
+  .track{position:relative;display:grid;grid-template-columns:repeat(3,1fr)}
+  .wire{position:absolute;top:33px;height:3px;border-radius:3px;z-index:1}
+  .wire.done{left:16.66%;right:50%;background:var(--good);opacity:.55}
+  .wire.active{left:50%;right:16.66%;
+    background:repeating-linear-gradient(90deg,var(--accent-2) 0 7px,transparent 7px 15px);
+    background-size:30px 3px;animation:flow 900ms linear infinite}
+  @keyframes flow{to{background-position:30px 0}}
+  .node{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:7px}
+  .disc{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:var(--panel-raised);border:1px solid var(--border);color:var(--muted);transition:.25s}
+  .disc svg{width:24px;height:24px}
+  .brand-oai{color:var(--text)}
+  .brand-claude{color:#C4663F}
+  :root[data-theme="dark"] .brand-claude{color:#E0906E}
+  .node .nm{font:800 10.5px/1.15 var(--sans);text-align:center}
+  .node .who{display:block;font:700 8px/1 var(--sans);letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin-top:3px}
+  .node.done .disc{color:var(--good);border-color:var(--good-bd);background:var(--good-bg)}
+  .node.active .disc{color:#fff;border-color:transparent;background:linear-gradient(140deg,var(--accent),var(--accent-2));animation:pulse 1.8s ease-in-out infinite}
+  .node.active .nm{color:var(--accent-ink)}
+  @keyframes pulse{0%,100%{box-shadow:0 0 22px -2px var(--glow-strong)}50%{box-shadow:0 0 38px 3px var(--glow-strong)}}
+  .retry{position:absolute;left:0;right:0;bottom:4px;display:flex;justify-content:center;z-index:0}
+  .retry-chip{display:inline-flex;align-items:center;gap:5px;
+    background:var(--warn-bg);border:1px solid var(--warn-bd);color:var(--warn);
+    font:800 8.5px/1 var(--sans);letter-spacing:.12em;padding:5px 9px;border-radius:6px;white-space:nowrap}
+
+  .propose{margin-top:8px;border-top:1px dashed var(--border);padding-top:11px;display:flex;flex-direction:column;min-height:0}
+  .plabel{font:800 9px/1 var(--sans);letter-spacing:.18em;color:var(--accent-2);margin-bottom:7px}
+  .propose p{margin:0 0 9px;font-size:12px;line-height:1.5}
+  .propose p .lead{font-family:var(--mono);font-weight:700;color:var(--accent-ink)}
+  .phase{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);font-weight:600;margin-top:auto}
+  .phase code{font-family:var(--mono);color:var(--text);font-weight:700}
+  .bar{height:6px;border-radius:6px;background:var(--panel-raised);overflow:hidden;position:relative;margin-top:9px;border:1px solid var(--border)}
+  .bar .fill{position:absolute;inset:0;width:40%;border-radius:6px;background:linear-gradient(90deg,transparent,var(--accent),var(--accent-2),transparent);animation:shim 1.5s linear infinite}
+  @keyframes shim{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+
+  /* lemmas */
+  .lemmas{display:flex;flex-direction:column;gap:6px}
+  .lemma{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;background:var(--panel-raised);border:1px solid var(--border)}
+  .lemma .ix{font-family:var(--mono);font-size:10px;color:var(--faint);font-weight:700}
+  .lemma code{font-family:var(--mono);font-weight:700;font-size:12px;flex:1}
+  .lemma.live{border-color:var(--accent);box-shadow:0 0 0 3px var(--glow);background:color-mix(in srgb,var(--accent) 8%,var(--panel-raised))}
+  .lemma.live code{color:var(--accent-ink)}
+
+  /* code */
+  .codewrap{display:flex;flex-direction:column;min-height:0;flex:1;border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--panel-solid)}
+  .cbar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);font:700 8.5px/1 var(--sans);letter-spacing:.12em;color:var(--faint);flex:none}
+  .cbar .fn{margin-left:auto;font-family:var(--mono);color:var(--accent-2);letter-spacing:0;font-size:10.5px}
+  pre.code{margin:0;padding:12px 14px;overflow:auto;flex:1;min-height:0;font-family:var(--mono);font-size:12px;line-height:1.62;font-weight:600}
+  pre.code .k{color:var(--sx-key)} pre.code .t{color:var(--sx-type)} pre.code .n{color:var(--sx-name)}
+  pre.code .c{color:var(--sx-com);font-weight:500} pre.code .num{color:var(--sx-num)}
+  pre.code .sorry{color:var(--sx-sorry);background:var(--warn-bg);border-radius:4px;padding:0 4px;font-weight:800}
+  .newline{background:color-mix(in srgb,var(--accent) 12%,transparent);display:block;margin:0 -14px;padding:0 14px;border-left:2px solid var(--accent)}
+
+  /* working indicator */
+  .work{display:flex;align-items:center;gap:13px}
+  .worklogo{font:italic 800 33px/1 Georgia,"Times New Roman","Times",serif;color:var(--accent);
+    width:38px;height:38px;display:grid;place-items:center;flex:none;
+    filter:drop-shadow(0 0 10px var(--glow-strong))}
+  .worklogo.spin{animation:logospin 1.5s linear infinite}
+  .worklogo.hover{animation:logofloat 2.6s ease-in-out infinite}
+  @keyframes logospin{to{transform:rotate(360deg)}}
+  @keyframes logofloat{0%,100%{transform:translateY(-3px)}50%{transform:translateY(3px)}}
+  .work .wt{font-weight:800;font-size:12.5px;letter-spacing:.01em}
+  .work .ws{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+
+  /* progress prose */
+  .prose{font-size:12.5px;line-height:1.65;color:var(--text)}
+  .prose p{margin:0 0 11px}
+  .prose .hl{color:var(--accent-ink);font-weight:700}
+  .prose em{font-style:normal;color:var(--faint);font-size:11px}
+
+  /* proof state — english | lean 4 */
+  .proofstate{display:grid;grid-template-columns:1fr 1fr;flex:1;min-height:0;border-radius:12px;border:1px solid var(--border);overflow:hidden;background:var(--panel-solid)}
+  .ppane{display:flex;flex-direction:column;min-height:0;min-width:0}
+  .ppane2{border-left:1px solid var(--border)}
+  .eng{padding:15px 17px;font-size:12.5px;line-height:1.58}
+  .eng ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px}
+  .eng li{padding-left:3px}
+  .eng .goal{font-family:var(--mono);font-weight:700;color:var(--accent-ink)}
+  .eng li.prog{color:var(--warn);font-weight:600;list-style:none;margin-left:-20px;padding-left:24px;position:relative}
+  .eng li.prog::before{content:"▸";position:absolute;left:7px;top:0;color:var(--warn)}
+  .eng .qed{font-weight:800;margin-left:2px}
+
+  /* upload modal */
+  .modal{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;padding:16px;
+    background:rgba(20,16,30,.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+  .modal.open{display:flex}
+  .modal-card{width:min(560px,94vw);max-height:92vh;overflow:auto;padding:20px 20px 16px;display:flex;flex-direction:column;gap:11px}
+  .modal-card h2{margin:0;font-size:15px;font-weight:800}
+  .modal-card label{display:flex;flex-direction:column;gap:5px;font:700 9.5px/1.2 var(--sans);letter-spacing:.09em;color:var(--muted);text-transform:uppercase}
+  .modal-card input,.modal-card textarea,.modal-card select{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--text);
+    background:var(--panel-raised);border:1px solid var(--border);border-radius:9px;padding:9px 11px;width:100%;resize:vertical}
+  .modal-card textarea{min-height:58px;line-height:1.5}
+  .modal-card input:focus,.modal-card textarea:focus,.modal-card select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--glow)}
+  .up-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .up-check{flex-direction:row!important;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:12px;font-weight:700;color:var(--text);cursor:pointer}
+  .up-check input{width:auto}
+  .up-eff{flex-direction:row!important;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)}
+  .up-eff select{width:auto;padding:6px 8px;font-size:11.5px}
+  #up-mlwarn{color:var(--warn);font-size:11px;font-weight:600;display:none}
+  #up-mlwarn.show{display:block}
+  .up-err{color:var(--bad);font-size:11.5px;font-weight:600;min-height:14px}
+  .modal-actions{display:flex;gap:9px;justify-content:flex-end}
+  .capbadge{display:inline-flex;align-items:center;gap:6px}
+  .capbadge .cd{width:7px;height:7px;border-radius:50%}
+  .capbadge.ok .cd{background:var(--good);box-shadow:0 0 8px var(--good)}
+  .capbadge.no .cd{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+
+  /* footer */
+  .foot{display:flex;align-items:center;gap:14px;padding:8px 15px;flex:none;flex-wrap:wrap}
+  .foot .s{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:var(--muted)}
+  .foot .s .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 10px var(--good)}
+  .foot .rb{margin-left:auto;display:flex;align-items:center;gap:10px;min-width:230px}
+  .foot .rb .bar{flex:1;margin:0}
+  .foot .rb .bar .fill{position:static;width:31%;animation:none;background:linear-gradient(90deg,var(--accent),var(--accent-2));height:100%}
+  .foot .rb span{font:700 10px/1 var(--sans);color:var(--muted);font-variant-numeric:tabular-nums}
+
+  .sun,.moon{display:none}
+  :root:not([data-theme]) .moon{display:block}
+  :root[data-theme="light"] .moon{display:block}
+  :root[data-theme="dark"] .sun{display:block}
+
+  @media (max-width:1120px){
+    .app{height:auto;min-height:100vh;overflow:visible}
+    .main{grid-template-columns:1fr}
+    .scroll{overflow:visible}
+    pre.code{max-height:380px;overflow:auto}
+    .proofstate{min-height:460px}
+  }
+  @media (max-width:760px){
+    .top{flex-wrap:wrap;gap:9px}
+    .spacer{display:none}
+    .selector{order:9;flex:1 1 100%;min-width:0}
+    .proofstate{grid-template-columns:1fr;min-height:0}
+    .ppane2{border-left:none;border-top:1px solid var(--border)}
+    .ppane{min-height:230px}
+  }
+  @media (max-width:560px){
+    .app{padding:8px}
+    .pad{padding:12px}
+    .wrap,.main{gap:9px}
+    .tiles{grid-template-columns:1fr 1fr}
+    .prob .title{font-size:20px}
+    .runstate span{display:none}
+    .runstate{padding:7px 9px}
+    .foot{gap:10px}
+    .foot .rb{min-width:100%;order:3}
+    pre.code{font-size:11.5px;max-height:300px}
+  }
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important} .bar .fill{width:38%;left:20%} .wire.active{background:var(--accent-2);opacity:.7} }
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+</style>
+
+<div class="app">
+ <div class="wrap">
+
+  <!-- HEADER -->
+  <header class="card top">
+    <div class="brand"><div><h1>Midas Prover</h1><span class="tagline">Turns Informal Reasoning Into Verified Lean Proofs</span></div></div>
+    <div class="selector" id="sel" tabindex="0" role="button" aria-haspopup="listbox" aria-expanded="false">
+      <span class="tag" id="pv-tag">—</span>
+      <span class="lbl" id="pv-sel-label">Select a problem<small>loading…</small></span>
+      <svg class="caret" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      <div class="menu" id="pv-menu" role="listbox" onclick="event.stopPropagation()"></div>
+    </div>
+    <button class="btn" id="pv-upload" title="Upload a new problem">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 20h16"/></svg>Upload
+    </button>
+    <button class="btn primary" id="pv-run" title="Run this problem">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5l12 7-12 7z"/></svg>Run
+    </button>
+    <div class="spacer"></div>
+    <div class="runstate"><span class="dot"></span><span id="pv-run-label">Idle</span></div>
+    <button class="btn iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+    </button>
+  </header>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- COLUMN A -->
+    <div class="col">
+      <div class="card pad prob">
+        <div>
+          <div class="eyebrow">NOW PROVING</div>
+          <h1 class="title" id="pv-title">—</h1>
+          <p class="sub" id="pv-sub">Select a problem and press Run.</p>
+          <div class="meta">
+            <span class="chip">Integer divisibility</span>
+            <span class="chip">Mathlib</span>
+          </div>
+        </div>
+        <div class="ring" title="53% complete">
+          <svg width="88" height="88" viewBox="0 0 88 88">
+            <circle cx="44" cy="44" r="35" fill="none" stroke="var(--border)" stroke-width="8"/>
+            <circle id="pv-ring" cx="44" cy="44" r="35" fill="none" stroke="url(#g)" stroke-width="8" stroke-linecap="round" stroke-dasharray="219.9" stroke-dashoffset="219.9"/>
+            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs>
+          </svg>
+          <div class="val"><span class="num" id="pv-pct">0%</span><span class="cap">COMPLETE</span></div>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <div class="work">
+          <div class="worklogo hover" id="pv-orb">&#8747;</div>
+          <div><div class="wt" id="pv-workstate">Idle</div><div class="ws" id="pv-workmeta">press Run to start</div></div>
+        </div>
+        <div class="bar" style="margin-top:13px"><div class="fill"></div></div>
+      </div>
+
+      <div class="card pad grow">
+        <div class="phead"><h2>Progress</h2><span class="pill run">AI SUMMARY</span></div>
+        <div class="prose scroll" id="pv-progress">
+          <p>The proof is <span class="hl">a little past halfway</span>. It has rewritten the target into a fully factored form and cleared the first divisibility obligation with a short parity-and-remainder argument.</p>
+          <p>Attention has moved to the remaining prime factor. Once that piece is in place, a coprimality argument will combine everything into the full claim that 30 divides n⁵ − n.</p>
+          <p><em>This overview is regenerated every few steps — the fine-grained work is condensed into the summary above.</em></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- COLUMN B · proof state -->
+    <div class="col">
+      <div class="card pad grow">
+        <div class="phead"><h2>Proof state</h2><span class="pill warn" id="pv-goal">NOT STARTED</span></div>
+        <div class="proofstate">
+          <div class="ppane">
+            <div class="cbar">ENGLISH</div>
+            <div class="eng scroll" id="pv-english">
+              <ol>
+                <li>Rewrite the goal in factored form: <span class="goal">n⁵ − n = n(n−1)(n+1)(n²+1)</span>.</li>
+                <li>Among any three consecutive integers n−1, n, n+1, one is even and one is a multiple of 3, so <span class="goal">6 ∣ n(n−1)(n+1)</span>.</li>
+                <li class="prog">In progress — one of the factors is always a multiple of 5, so 5 divides the whole product.</li>
+                <li>Since 6 and 5 are coprime, their product <span class="goal">30 ∣ n(n−1)(n+1)(n²+1) = n⁵ − n</span>.<span class="qed">∎</span></li>
+              </ol>
+            </div>
+          </div>
+          <div class="ppane ppane2">
+            <div class="cbar">LEAN 4 FILE <span class="fn">solution.lean</span></div>
+<pre class="code" id="pv-lean"><span class="k">import</span> <span class="n">Mathlib</span>
+<span class="k">set_option</span> maxHeartbeats <span class="num">0</span>
+
+<span class="c">-- Factorization of n⁵ − n</span>
+<span class="k">lemma</span> <span class="n">n5_sub_n_factored</span> (n : <span class="t">ℤ</span>) :
+    n ^ <span class="num">5</span> - n = n * (n-<span class="num">1</span>) * (n+<span class="num">1</span>) * (n^<span class="num">2</span>+<span class="num">1</span>) := <span class="k">by</span> <span class="k">ring</span>
+
+<span class="c">-- 6 ∣ product of three consecutive integers</span>
+<span class="k">lemma</span> <span class="n">six_dvd_n_pred_succ</span> (n : <span class="t">ℤ</span>) :
+    (<span class="num">6</span> : <span class="t">ℤ</span>) <span class="t">∣</span> n * (n-<span class="num">1</span>) * (n+<span class="num">1</span>) := <span class="k">by</span>
+  <span class="k">have</span> h2 := <span class="k">by</span> <span class="k">rcases</span> <span class="n">Int.even_or_odd</span> n <span class="c">…</span>
+  <span class="k">have</span> h3 := <span class="k">by</span> <span class="k">have</span> : n % <span class="num">3</span> = <span class="num">0</span> ∨ _ := <span class="k">by</span> <span class="k">omega</span> <span class="c">…</span>
+  <span class="k">exact</span> <span class="n">IsCoprime</span>.mul_dvd ⟨-<span class="num">1</span>,<span class="num">1</span>,<span class="k">by</span> <span class="k">norm_num</span>⟩ h2 h3
+
+<span class="c">-- 5 ∣ full product   ← proving now</span><span class="newline"><span class="k">lemma</span> <span class="n">five_dvd_prod</span> (n : <span class="t">ℤ</span>) :
+    (<span class="num">5</span> : <span class="t">ℤ</span>) <span class="t">∣</span> n*(n-<span class="num">1</span>)*(n+<span class="num">1</span>)*(n^<span class="num">2</span>+<span class="num">1</span>) := <span class="k">by</span> <span class="sorry">sorry</span></span>
+
+<span class="k">theorem</span> <span class="n">main</span> (n : <span class="t">ℤ</span>) : (<span class="num">30</span> : <span class="t">ℤ</span>) <span class="t">∣</span> n ^ <span class="num">5</span> - n := <span class="k">by</span>
+  <span class="k">have</span> h  := <span class="n">n5_sub_n_factored</span> n
+  <span class="k">have</span> h6 := <span class="n">six_dvd_n_pred_succ</span> n
+  <span class="sorry">sorry</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="card foot">
+    <div class="s"><span class="dot"></span>Formally verified in the Lean 4 kernel</div>
+    <div class="s capbadge" id="pv-caps"><span class="cd"></span><span id="pv-caps-text">checking…</span></div>
+    <div class="rb"><span>RUNTIME</span><div class="bar"><div class="fill" id="pv-rt-fill" style="width:0%"></div></div><span id="pv-rt">0:00 / 0:00</span></div>
+  </footer>
+
+  <div class="modal" id="pv-modal">
+    <div class="modal-card card">
+      <h2>New problem</h2>
+      <label>Name<input id="up-id" placeholder="my_problem" autocomplete="off" spellcheck="false"></label>
+      <label>Informal statement<textarea id="up-informal" placeholder="Prove that ..."></textarea></label>
+      <label>Context — Lean definitions (optional)<textarea id="up-context" placeholder="def ... "></textarea></label>
+      <label>Initial theorem — must end with sorry<textarea id="up-body">theorem main : 1 + 1 = 2 := by
+  sorry</textarea></label>
+      <div class="up-row">
+        <label class="up-check"><input type="checkbox" id="up-mathlib"> Requires Mathlib (IMO / Putnam / analysis)</label>
+        <label class="up-eff">Effort<select id="up-effort"><option value="minimal">minimal</option><option value="low" selected>low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+      </div>
+      <div id="up-mlwarn"></div>
+      <div class="up-err" id="up-err"></div>
+      <div class="modal-actions">
+        <button class="btn" id="up-cancel">Cancel</button>
+        <button class="btn primary" id="up-submit">Create &amp; select</button>
+      </div>
+    </div>
+  </div>
+
+ </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var root=document.documentElement, sel=$('sel');
+  var C=2*Math.PI*35, current=null, poll=null, caps={mathlib:false};
+
+  function loadCaps(){
+    fetch('/api/capabilities').then(function(r){return r.json()}).then(function(c){
+      caps=c;
+      var b=$('pv-caps'); b.className='s capbadge '+(c.mathlib?'ok':'no');
+      $('pv-caps-text').textContent=c.mathlib?'Mathlib: available':'Mathlib: not configured';
+      b.title=c.note||'';
+    }).catch(function(){});
+  }
+
+  $('themeBtn').addEventListener('click',function(){var c=root.getAttribute('data-theme')||'light';root.setAttribute('data-theme',c==='dark'?'light':'dark')});
+  sel.addEventListener('click',function(){sel.classList.toggle('open')});
+  document.addEventListener('click',function(e){if(!sel.contains(e.target))sel.classList.remove('open')});
+
+  function esc(s){return (s||'').replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+  function tagOf(id){return id.split(/[_-]/)[0].toUpperCase().slice(0,3)}
+  function shortTitle(p){var s=(p.statement||'').split('\n')[0];return s.length>44?s.slice(0,44)+'…':s}
+  function mmss(s){s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2)}
+
+  function pickProblem(p){
+    current=p.id;
+    $('pv-tag').textContent=tagOf(p.id);
+    $('pv-sel-label').innerHTML=esc(shortTitle(p))+'<small>'+esc(p.id)+'</small>';
+    sel.classList.remove('open');
+    if(poll){clearInterval(poll);poll=null;}
+    load();
+  }
+
+  function loadProblems(selectId){
+    return fetch('/api/problems').then(function(r){return r.json()}).then(function(list){
+      var m=$('pv-menu'); m.innerHTML='';
+      list.forEach(function(p){
+        var o=document.createElement('div'); o.className='opt';
+        o.innerHTML='<code>'+esc(tagOf(p.id))+'</code><span class="nm">'+esc(shortTitle(p))+'</span>'+(p.solved?'<span class="ok">SOLVED</span>':'');
+        o.addEventListener('click',function(){pickProblem(p)});
+        m.appendChild(o);
+      });
+      function find(id){return id&&list.filter(function(p){return p.id===id})[0];}
+      var pref=find(selectId)||find(current)||find('p1_sanity')||list[0];
+      if(pref)pickProblem(pref);
+    });
+  }
+
+  var KW={import:1,set_option:1,open:1,namespace:1,end:1,def:1,abbrev:1,lemma:1,theorem:1,example:1,instance:1,structure:1,inductive:1,by:1,have:1,show:1,suffices:1,let:1,fun:1,match:1,with:1,from:1,calc:1,intro:1,intros:1,exact:1,apply:1,refine:1,rw:1,rewrite:1,simp:1,simpa:1,simp_all:1,unfold:1,rcases:1,obtain:1,cases:1,induction:1,constructor:1,use:1,omega:1,decide:1,rfl:1,ring:1,ring_nf:1,norm_num:1,linarith:1,nlinarith:1,positivity:1,trivial:1,assumption:1,contradiction:1,at:1,"in":1,then:1,"else":1,"if":1};
+  var TYPES='ℤℕℝℚℂ', OPS='∣∀∃≤≥≠→↔¬∈∉⊆∪∩∧∨×∘∑∏';
+  function hlLean(src){
+    var out='',i=0,n=src.length,ids=/[A-Za-z0-9_'.!?]/;
+    while(i<n){var c=src[i];
+      if(c==='-'&&src[i+1]==='-'){var j=src.indexOf('\n',i);if(j<0)j=n;out+='<span class="c">'+esc(src.slice(i,j))+'</span>';i=j;continue;}
+      if(/[A-Za-z_]/.test(c)){var j=i+1;while(j<n&&ids.test(src[j]))j++;var w=src.slice(i,j);
+        if(w==='sorry')out+='<span class="sorry">sorry</span>';
+        else if(KW[w])out+='<span class="k">'+esc(w)+'</span>';
+        else if(w.indexOf('.')>0||/^[A-Z]/.test(w))out+='<span class="n">'+esc(w)+'</span>';
+        else out+=esc(w);
+        i=j;continue;}
+      if(c>='0'&&c<='9'){var j=i+1;while(j<n&&src[j]>='0'&&src[j]<='9')j++;out+='<span class="num">'+src.slice(i,j)+'</span>';i=j;continue;}
+      if(TYPES.indexOf(c)>=0||OPS.indexOf(c)>=0){out+='<span class="t">'+esc(c)+'</span>';i++;continue;}
+      out+=esc(c);i++;}
+    return out;
+  }
+
+  function render(v){
+    $('pv-title').textContent=v.goal||v.problem;
+    $('pv-sub').textContent=v.statement||'';
+    var pct=v.percent||0, running=v.running, done=v.status==='final_success',
+        failed=v.status==='error'||(v.status||'').indexOf('fail')>=0;
+    $('pv-pct').textContent=pct+'%';
+    $('pv-ring').setAttribute('stroke-dashoffset',(C*(1-pct/100)).toFixed(1));
+    $('pv-orb').className='worklogo '+(running?'spin':'hover');
+    if(done){$('pv-run-label').textContent='Solved';$('pv-workstate').textContent='Proof complete';$('pv-workmeta').textContent='complete · proved in '+v.steps+' step'+(v.steps===1?'':'s');}
+    else if(failed){$('pv-run-label').textContent='Stopped';$('pv-workstate').textContent='Stopped';$('pv-workmeta').textContent='the run ended early';}
+    else if(v.status==='loading'){$('pv-run-label').textContent='Loading Mathlib…';$('pv-workstate').textContent='Loading Mathlib…';$('pv-workmeta').textContent='one-time · ~15–40 s';}
+    else if(v.status==='starting'){$('pv-run-label').textContent='Starting…';$('pv-workstate').textContent='Starting…';$('pv-workmeta').textContent='warming up';}
+    else if(running){$('pv-run-label').textContent='Proving · step '+v.steps;$('pv-workstate').textContent='Proving…';$('pv-workmeta').textContent='step '+v.steps+' · '+pct+'% complete';}
+    else{$('pv-run-label').textContent=v.status==='idle'?'Idle':'Ready';$('pv-workstate').textContent='Idle';$('pv-workmeta').textContent='press Run to start';}
+    $('pv-progress').innerHTML='<p>'+esc(v.progress).replace(/\n\s*\n/g,'</p><p>')+'</p>';
+    var ol='<ol>';
+    (v.knowledge||[]).forEach(function(k){ol+='<li>'+esc(k)+'</li>'});
+    if(running) ol+='<li class="prog">Working on the next step…</li>';
+    else if(done) ol+='<li><span class="qed">∎</span> Proof complete and verified in Lean.</li>';
+    else if(failed) ol+='<li class="prog">The run stopped before completing.</li>';
+    else if(!(v.knowledge||[]).length) ol+='<li class="prog">No steps yet — press Run.</li>';
+    ol+='</ol>'; $('pv-english').innerHTML=ol;
+    $('pv-lean').innerHTML=v.lean?hlLean(v.lean):'(no proof yet)';
+    $('pv-goal').textContent=done?'CLOSED':(failed?'ERROR':(running?'PROVING…':(v.steps?'IN PROGRESS':'NOT STARTED')));
+    $('pv-goal').className='pill '+(done?'ok':(failed?'bad':'warn'));
+    var el=v.elapsed||0, bud=v.budget||0;
+    $('pv-rt').textContent=mmss(el)+' / '+mmss(bud);
+    $('pv-rt-fill').style.width=(bud?Math.min(100,el/bud*100):0)+'%';
+  }
+
+  function load(){
+    if(!current) return;
+    fetch('/api/state?problem='+encodeURIComponent(current)).then(function(r){return r.json()}).then(function(v){
+      render(v);
+      if(v.running){if(!poll)poll=setInterval(load,1500);}else{if(poll){clearInterval(poll);poll=null;}}
+    }).catch(function(){});
+  }
+
+  $('pv-run').addEventListener('click',function(){
+    if(!current) return;
+    $('pv-run-label').textContent='Starting…';
+    fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({problem:current})})
+      .then(function(r){return r.json()}).then(function(){if(!poll)poll=setInterval(load,1500);setTimeout(load,600);});
+  });
+
+  var modal=$('pv-modal'), mlBox=$('up-mathlib'), effSel=$('up-effort'), mlWarn=$('up-mlwarn');
+  function openModal(o){modal.classList.toggle('open',o);if(o){$('up-err').textContent='';syncMl();}}
+  function syncMl(){
+    if(mlBox.checked && caps && !caps.mathlib){mlWarn.textContent='Heads up: this server isn’t configured to verify Mathlib yet, so Run will fail until it is. The problem is still saved.';mlWarn.classList.add('show');}
+    else mlWarn.classList.remove('show');
+  }
+  mlBox.addEventListener('change',function(){effSel.value=mlBox.checked?'high':'low';syncMl();});
+  $('pv-upload').addEventListener('click',function(){openModal(true)});
+  $('up-cancel').addEventListener('click',function(){openModal(false)});
+  modal.addEventListener('click',function(e){if(e.target===modal)openModal(false)});
+  $('up-submit').addEventListener('click',function(){
+    var payload={id:$('up-id').value.trim(),informal:$('up-informal').value,context:$('up-context').value,
+                 body:$('up-body').value,mathlib:mlBox.checked,effort:effSel.value};
+    $('up-err').textContent='';
+    fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d}})})
+      .then(function(res){
+        if(!res.ok){$('up-err').textContent=(res.d&&res.d.error)||'Upload failed.';return;}
+        openModal(false);
+        loadProblems(res.d.id);
+      }).catch(function(){$('up-err').textContent='Network error.';});
+  });
+
+  loadCaps();
+  loadProblems();
+})();
+</script>
