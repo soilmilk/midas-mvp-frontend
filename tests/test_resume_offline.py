@@ -52,6 +52,11 @@ def T(declarations, body, *, final=False):
         f"{heading}:\n```lean4\n{body}\n```\n"
     )
 
+ALIGNED = (
+    "INTERMEDIATE REASONING:\nThe transaction establishes the requested step.\n\n"
+    "VERDICT: ALIGNED\n\nFEEDBACK:\nNone"
+)
+
 
 checks = []
 
@@ -71,6 +76,7 @@ failed = run_problem(
           "theorem main : f A = f B := by\n  sorry"),
         RuntimeError("translator outage"),
     ],
+    reviewer_offline=[ALIGNED] * 10,
 )
 translator_root = os.path.join(RUNS, "resume_translator")
 attempt1 = os.path.join(
@@ -93,6 +99,7 @@ resumed = resume_problem(
           "theorem main : f A = f B := by\n  exact finished_resume",
           final=True),
     ],
+    reviewer_offline=[ALIGNED] * 10,
 )
 archives = glob.glob(os.path.join(translator_root, "archive", "resume_*"))
 archive = archives[0] if len(archives) == 1 else ""
@@ -126,6 +133,7 @@ reasoner_failed = run_problem(
     runs_root=RUNS,
     reasoning_offline=[RuntimeError("reasoner outage")] * 3,
     translation_offline=[],
+    reviewer_offline=[],
 )
 reasoner_root = os.path.join(RUNS, "resume_reasoner")
 reasoner_resumed = resume_problem(
@@ -136,6 +144,7 @@ reasoner_resumed = resume_problem(
           "theorem main : f A = f B := by\n  exact direct_resume",
           final=True),
     ],
+    reviewer_offline=[ALIGNED] * 5,
 )
 reasoner_archives = glob.glob(os.path.join(reasoner_root, "archive", "resume_*"))
 checks.extend([
@@ -148,7 +157,8 @@ checks.extend([
 
 # Successful runs are never mutated by resume.
 try:
-    resume_problem(reasoner_root, reasoning_offline=[], translation_offline=[])
+    resume_problem(reasoner_root, reasoning_offline=[], translation_offline=[],
+                   reviewer_offline=[])
     successful_rejected = False
 except ValueError as error:
     successful_rejected = "successful run" in str(error)

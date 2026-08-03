@@ -9,12 +9,15 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from .models import (AcceptedKnowledge, ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
+                     SemanticReviewAttempt, SemanticReviewReport,
                      RunStats, LLMUsageStats, CheckReport, CompileJson, Diagnostic,
                      Config, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgent,
+                     SemanticReviewerAgent,
                      TranslationRepairContext)
-from .parser import parse_reasoning_action, parse_translator_output
+from .parser import (parse_reasoning_action, parse_translator_output,
+                     parse_semantic_review)
 from .structure import (check_filled_placeholder, check_structure,
                         body_contains_sorry, declared_names,
                         exploration_progress_violations,
@@ -33,7 +36,7 @@ def _now(): return time.time()
 def _account_llm_call(state: ProofRunState, role: str,
                       result: Optional[LLMResult] = None):
     """Record one attempted call without inventing missing provider usage."""
-    if role not in ("reasoner", "translator"):
+    if role not in ("reasoner", "translator", "reviewer"):
         raise ValueError(f"unsupported LLM role: {role!r}")
     state.stats.total_llm_calls += 1
     buckets = (state.stats.llm_usage.total,
@@ -317,7 +320,7 @@ class _ResumeCursor:
     step: int
     candidate: int
     attempt: Optional[int]
-    kind: str                         # reasoner | translator
+    kind: str                         # reasoner | translator | reviewer
     saved_prompt: str = ""
     archive_root: str = ""
 
@@ -374,6 +377,22 @@ def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
                 "reasoner",
             )
         for attempt in candidate.lean_translation_attempts:
+            pending_review = next(
+                (review for review in attempt.semantic_review_attempts
+                 if review.status == "pending"),
+                None,
+            )
+            if pending_review is not None:
+                prompt = ""
+                if pending_review.prompt_path and os.path.exists(pending_review.prompt_path):
+                    prompt = open(pending_review.prompt_path).read()
+                return _ResumeCursor(
+                    terminal.proof_step_index,
+                    candidate.informal_candidate_index,
+                    attempt.lean_translation_attempt_index,
+                    "reviewer",
+                    saved_prompt=prompt,
+                )
             if attempt.status in ("translation_call_failed", "pending"):
                 prompt = ""
                 if attempt.translator_prompt_path and os.path.exists(
@@ -388,7 +407,7 @@ def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
                     saved_prompt=prompt,
                 )
     raise ValueError(
-        "terminal proof step contains no interrupted reasoner or translator call"
+        "terminal proof step contains no interrupted reasoner, translator, or reviewer call"
     )
 
 
@@ -409,7 +428,7 @@ def _validate_resume_prefix(paths: Paths, state: ProofRunState,
                     f"accepted artifacts missing for proof step "
                     f"{step.proof_step_index}"
                 )
-    if cursor.kind == "translator":
+    if cursor.kind in ("translator", "reviewer"):
         step = next(s for s in state.proof_steps
                     if s.proof_step_index == cursor.step)
         candidate = next(c for c in step.informal_candidates
@@ -461,6 +480,29 @@ def _archive_and_rewind(paths: Paths, state: ProofRunState,
         candidate.status = "pending"
         candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
         step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
+    elif cursor.kind == "reviewer":
+        candidate = step.informal_candidates[candidate_pos]
+        assert cursor.attempt is not None
+        selected = next(
+            attempt for attempt in candidate.lean_translation_attempts
+            if attempt.lean_translation_attempt_index == cursor.attempt
+        )
+        archive(os.path.join(
+            paths.la(cursor.step, cursor.candidate, cursor.attempt),
+            "semantic_reviews",
+        ))
+        selected.semantic_review_attempts = []
+        for attempt in candidate.lean_translation_attempts:
+            if attempt.lean_translation_attempt_index > cursor.attempt:
+                archive(paths.la(cursor.step, cursor.candidate,
+                                 attempt.lean_translation_attempt_index))
+        candidate.lean_translation_attempts = [
+            attempt for attempt in candidate.lean_translation_attempts
+            if attempt.lean_translation_attempt_index <= cursor.attempt
+        ]
+        candidate.status = "pending"
+        candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
+        step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
     else:
         candidates_to_archive = step.informal_candidates[candidate_pos:]
         step.informal_candidates = step.informal_candidates[:candidate_pos]
@@ -501,6 +543,39 @@ def _resume_repair_context(candidate: InformalCandidate):
     if not previous.compile_path or not os.path.isfile(previous.compile_path):
         return "", None
     compile_json = CompileJson.model_validate_json(open(previous.compile_path).read())
+    if previous.status in (
+        "semantic_misalignment", "reviewer_call_failed", "reviewer_parse_error"
+    ):
+        feedback = (compile_json.semantic_review.feedback or previous.status)
+        declarations = (
+            open(previous.declarations_path).read()
+            if previous.declarations_path and os.path.isfile(previous.declarations_path)
+            else ""
+        )
+        body = (
+            open(previous.body_path).read()
+            if previous.body_path and os.path.isfile(previous.body_path) else ""
+        )
+        placeholder = (
+            open(previous.placeholder_path).read()
+            if previous.placeholder_path and os.path.isfile(previous.placeholder_path)
+            else ""
+        )
+        raw = (
+            open(previous.raw_translator_output_path).read()
+            if previous.raw_translator_output_path
+            and os.path.isfile(previous.raw_translator_output_path)
+            else ""
+        )
+        return "Semantic alignment review failed:\n" + feedback, TranslationRepairContext(
+            failed_check="semantic_alignment",
+            raw_output=raw,
+            declarations=declarations,
+            placeholder=placeholder,
+            body=body,
+            diagnostics=feedback,
+            attempt_kind=previous.attempt_kind,
+        )
     report_name = {
         "lemma_failed": "declaration_check",
         "body_failed": "body_check",
@@ -558,6 +633,7 @@ def _resume_repair_context(candidate: InformalCandidate):
 def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_offline: Optional[List[OfflineResponse]] = None,
                 translation_offline: Optional[List[OfflineResponse]] = None,
+                reviewer_offline: Optional[List[OfflineResponse]] = None,
                 *, _resume_root: Optional[str] = None) -> ProofRunState:
     resume_cursor = None
     if _resume_root is not None:
@@ -596,6 +672,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         f"Configuration: mode={prob.config.problem_mode}, "
         f"reasoner={prob.config.reasoning_model}, "
         f"translator={prob.config.translation_model}, "
+        f"reviewer={prob.config.reviewer_model or prob.config.translation_model}, "
         f"verifier={prob.config.verifier_backend}",
         indent=1,
     )
@@ -767,6 +844,147 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         translation_offline,
         reasoning_effort=prob.config.translator_reasoning_effort,
     )
+    reviewer = SemanticReviewerAgent(
+        prob.config.reviewer_model or prob.config.translation_model,
+        _read(os.path.join(CONSID, "SEMANTIC_REVIEW_CONSIDERATIONS.md")),
+        reviewer_offline,
+        reasoning_effort=(
+            prob.config.reviewer_reasoning_effort
+            if prob.config.reviewer_reasoning_effort is not None
+            else prob.config.translator_reasoning_effort
+        ),
+    )
+
+    def semantic_review(i, j, k, la, action, informal_candidate,
+                        attempt_kind, translator_result, parsed,
+                        accepted_declarations, current_body,
+                        saved_prompt=""):
+        """Review one compiling transaction, retrying only reviewer infrastructure."""
+        current_file = render_source(
+            prelude, prob.context, accepted_declarations,
+            placeholder=(placeholder_initial_source or "")
+            if problem_mode == "hard" else "",
+            theorem_body=current_body,
+        ).text
+        candidate_placeholder = (
+            placeholder_initial_source or ""
+            if attempt_kind == "exploration" and problem_mode == "hard"
+            else parsed.placeholder or ""
+            if attempt_kind == "hard_finalization"
+            else ""
+        )
+        candidate_file = render_source(
+            prelude, prob.context, accepted_declarations,
+            candidate_declarations=parsed.declarations,
+            placeholder=candidate_placeholder,
+            theorem_body=parsed.body,
+        ).text
+        prompt = saved_prompt or reviewer.build_prompt(
+            prob.informal_problem,
+            informal_candidate,
+            current_file,
+            translator_result.text,
+            candidate_file,
+            attempt_kind=attempt_kind,
+            answer=action.answer,
+        )
+        last_status = "reviewer_call_failed"
+        last_feedback = "Semantic reviewer call did not return."
+        for review_index in range(1, prob.config.max_reviewer_call_attempts + 1):
+            review_state = SemanticReviewAttempt(
+                semantic_review_attempt_index=review_index,
+            )
+            la.semantic_review_attempts.append(review_state)
+            review_state.prompt_path = logger.write_reviewer_prompt(
+                i, j, k, review_index, prompt
+            )
+            events.event(
+                f"Semantic reviewer attempt {review_index} started: "
+                f"{review_state.prompt_path} ({len(prompt)} chars)",
+                indent=4,
+            )
+            statemgr.save(state)
+            if _now() >= deadline:
+                review_state.status = "call_failed"
+                last_feedback = "Semantic reviewer was not called because the runtime limit was reached."
+                review_state.call_error_path = logger.write_reviewer_error(
+                    i, j, k, review_index, last_feedback
+                )
+                return False, SemanticReviewReport(
+                    status="call_failed", feedback=last_feedback
+                ), "reviewer_call_failed", last_feedback
+            timeout = call_timeout()
+            events.event(
+                f"Waiting for semantic reviewer response (model={reviewer.model}, "
+                f"timeout={timeout:.1f}s)",
+                indent=4, console=True,
+            )
+            started = _now()
+            try:
+                result = reviewer.review(
+                    timeout=timeout, prepared_prompt=prompt
+                )
+            except Exception as error:
+                _account_llm_call(state, "reviewer")
+                review_state.status = "call_failed"
+                last_status = "reviewer_call_failed"
+                last_feedback = (
+                    f"semantic reviewer call failed: {type(error).__name__}: "
+                    f"{str(error)[:500]}"
+                )
+                review_state.call_error_path = logger.write_reviewer_error(
+                    i, j, k, review_index, last_feedback
+                )
+                events.event(
+                    f"Semantic reviewer call failed after {_now() - started:.3f}s: "
+                    f"{type(error).__name__}: {str(error)[:200]}",
+                    indent=4, console=True,
+                )
+                statemgr.save(state)
+                continue
+            _account_llm_call(state, "reviewer", result)
+            review_state.raw_output_path = logger.write_reviewer_output(
+                i, j, k, review_index, result.text
+            )
+            events.event(
+                f"Semantic reviewer response received after {_now() - started:.3f}s "
+                f"({len(result.text)} chars)", indent=4, console=True,
+            )
+            events.event(_usage_event("reviewer", result), indent=5)
+            parsed_review = parse_semantic_review(result.text)
+            if not parsed_review.ok:
+                review_state.status = "parse_error"
+                last_status = "reviewer_parse_error"
+                last_feedback = f"Semantic reviewer output was invalid: {parsed_review.error}"
+                review_state.feedback = last_feedback
+                events.event(
+                    f"Semantic reviewer output parse failed: {parsed_review.error}",
+                    indent=4, console=True,
+                )
+                statemgr.save(state)
+                continue
+            review_state.verdict = parsed_review.verdict
+            review_state.feedback = parsed_review.feedback
+            if parsed_review.verdict == "ALIGNED":
+                review_state.status = "passed"
+                statemgr.save(state)
+                events.event("Semantic alignment review passed", indent=4, console=True)
+                return True, SemanticReviewReport(
+                    status="passed", verdict="ALIGNED",
+                    feedback=parsed_review.feedback,
+                ), "", ""
+            review_state.status = "failed"
+            statemgr.save(state)
+            events.event("Semantic alignment review rejected the transaction",
+                         indent=4, console=True)
+            return False, SemanticReviewReport(
+                status="failed", verdict="MISALIGNED",
+                feedback=parsed_review.feedback,
+            ), "semantic_misalignment", parsed_review.feedback
+        return False, SemanticReviewReport(
+            status="call_failed" if last_status == "reviewer_call_failed" else "parse_error",
+            feedback=last_feedback,
+        ), last_status, last_feedback
 
     accepted_decls: List[str] = []
     latest_body = prob.body_initial
@@ -818,12 +1036,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         candidate_start = active_resume.candidate if active_resume is not None else 1
         for j in range(candidate_start,
                        prob.config.max_informal_candidates_per_proof_step + 1):
-            resuming_translation = (
+            resuming_transaction = (
                 active_resume is not None
-                and active_resume.kind == "translator"
+                and active_resume.kind in ("translator", "reviewer")
                 and j == active_resume.candidate
             )
-            if resuming_translation:
+            resuming_reviewer = (
+                resuming_transaction and active_resume.kind == "reviewer"
+            )
+            if resuming_transaction:
                 ic = ps.informal_candidates[-1]
                 events.event(f"Candidate {j} resumed", indent=2, console=True)
             else:
@@ -842,7 +1063,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    if problem_mode == "hard" else ""),
                                latest_body, last_error, category_counts)
                 return finish()
-            if resuming_translation:
+            if resuming_transaction:
                 if not ic.informal_step_path or not os.path.isfile(
                     ic.informal_step_path
                 ):
@@ -947,7 +1168,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             )
             candidate_accepted = False
             candidate_rejection_feedback = ""
-            if resuming_translation:
+            candidate_semantic_feedback = ""
+            if resuming_transaction:
                 compiler_feedback, repair_context = _resume_repair_context(ic)
                 attempt_start = active_resume.attempt
             else:
@@ -966,103 +1188,124 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    latest_body, last_error, category_counts)
                     return finish()
 
-                state.stats.total_lean_attempts += 1
-                la = LeanTranslationAttempt(
-                    lean_translation_attempt_index=k,
-                    attempt_kind=attempt_kind,
-                    proposed_final_answer=(
-                        action.answer if attempt_kind == "hard_finalization" else None
-                    ),
-                )
-                ic.lean_translation_attempts.append(la)
-                events.event(
-                    f"Lean translation attempt {k} started (kind={attempt_kind})",
-                    indent=3, console=True,
-                )
-                statemgr.save(state)
-                if (resuming_translation and k == attempt_start
-                        and active_resume.saved_prompt):
-                    translation_prompt = active_resume.saved_prompt
-                else:
-                    translation_prompt = translation.build_prompt(
-                        header, prob.informal_problem, prelude, prob.context,
-                        accepted_decls, latest_body, informal_candidate,
-                        compiler_feedback=compiler_feedback,
-                        repair_context=repair_context,
-                        attempt_kind=attempt_kind,
-                        placeholder_header=(
-                            placeholder_header if problem_mode == "hard" else None
-                        ),
-                        placeholder_initial_source=(
-                            placeholder_initial_source
-                            if problem_mode == "hard" else None
-                        ),
-                        answer=action.answer,
+                reviewer_resume_now = resuming_reviewer and k == attempt_start
+                if reviewer_resume_now:
+                    la = next(
+                        attempt for attempt in ic.lean_translation_attempts
+                        if attempt.lean_translation_attempt_index == k
                     )
-                la.translator_prompt_path = logger.write_translation_prompt(
-                    i, j, k, translation_prompt
-                )
-                events.event(
-                    f"Translator prompt: {la.translator_prompt_path} "
-                    f"({len(translation_prompt)} chars)",
-                    indent=4,
-                )
-                statemgr.save(state)
-                translation_timeout = call_timeout()
-                events.event(
-                    f"Waiting for translator response (model={translation.model}, "
-                    f"timeout={translation_timeout:.1f}s)",
-                    indent=4, console=True,
-                )
-                translation_started = _now()
-                try:
-                    t = translation.translate(
-                        attempt_index=k - 1,
-                        timeout=translation_timeout,
-                        prepared_prompt=translation_prompt,
-                    )
-                except Exception as e:                      # timeout / API error — don't crash
-                    _account_llm_call(state, "translator")
-                    last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
-                    bump("translation_call_failed")
-                    la.status = "translation_call_failed"
-                    cj = CompileJson(
-                        attempt_status="translation_call_failed",
-                        attempt_kind=attempt_kind,
-                        translator_output_empty=True,
-                        translation_call_error=last_error,
-                    )
-                    failed_result = LLMResult(
-                        prompt=translation.last_prompt,
-                        text="",
-                        model=translation.model,
-                    )
-                    _log_attempt(
-                        logger, la, paths, i, j, k, failed_result,
-                        None, None, cj,
+                    if (not la.raw_translator_output_path
+                            or not os.path.isfile(la.raw_translator_output_path)):
+                        raise ValueError("saved reviewer checkpoint lacks translator output")
+                    t = LLMResult(
+                        prompt=(open(la.translator_prompt_path).read()
+                                if la.translator_prompt_path
+                                and os.path.isfile(la.translator_prompt_path) else ""),
+                        text=open(la.raw_translator_output_path).read(),
+                        model=translation.model + "[saved]",
                     )
                     events.event(
-                        f"Translator call failed after {_now() - translation_started:.3f}s: "
-                        f"{type(e).__name__}: {str(e)[:200]}",
+                        f"Lean translation attempt {k} resumed at semantic review",
+                        indent=3, console=True,
+                    )
+                else:
+                    state.stats.total_lean_attempts += 1
+                    la = LeanTranslationAttempt(
+                        lean_translation_attempt_index=k,
+                        attempt_kind=attempt_kind,
+                        proposed_final_answer=(
+                            action.answer if attempt_kind == "hard_finalization" else None
+                        ),
+                    )
+                    ic.lean_translation_attempts.append(la)
+                    events.event(
+                        f"Lean translation attempt {k} started (kind={attempt_kind})",
+                        indent=3, console=True,
+                    )
+                    statemgr.save(state)
+                    if (resuming_transaction and active_resume.kind == "translator"
+                            and k == attempt_start and active_resume.saved_prompt):
+                        translation_prompt = active_resume.saved_prompt
+                    else:
+                        translation_prompt = translation.build_prompt(
+                            header, prob.informal_problem, prelude, prob.context,
+                            accepted_decls, latest_body, informal_candidate,
+                            compiler_feedback=compiler_feedback,
+                            repair_context=repair_context,
+                            attempt_kind=attempt_kind,
+                            placeholder_header=(
+                                placeholder_header if problem_mode == "hard" else None
+                            ),
+                            placeholder_initial_source=(
+                                placeholder_initial_source
+                                if problem_mode == "hard" else None
+                            ),
+                            answer=action.answer,
+                        )
+                    la.translator_prompt_path = logger.write_translation_prompt(
+                        i, j, k, translation_prompt
+                    )
+                    events.event(
+                        f"Translator prompt: {la.translator_prompt_path} "
+                        f"({len(translation_prompt)} chars)",
+                        indent=4,
+                    )
+                    statemgr.save(state)
+                    translation_timeout = call_timeout()
+                    events.event(
+                        f"Waiting for translator response (model={translation.model}, "
+                        f"timeout={translation_timeout:.1f}s)",
                         indent=4, console=True,
                     )
-                    compiler_feedback = "The previous translation call did not return; keep the output short."
-                    statemgr.save(state); continue
-                _account_llm_call(state, "translator", t)
-                la.raw_translator_output_path = logger.write_translation_output(
-                    i, j, k, t.text
-                )
-                events.event(
-                    f"Translator response received after {_now() - translation_started:.3f}s "
-                    f"({len(t.text)} chars)",
-                    indent=4, console=True,
-                )
-                events.event(
-                    f"Translator response artifact: {la.raw_translator_output_path}",
-                    indent=5,
-                )
-                events.event(_usage_event("translator", t), indent=5)
-                statemgr.save(state)
+                    translation_started = _now()
+                    try:
+                        t = translation.translate(
+                            attempt_index=k - 1,
+                            timeout=translation_timeout,
+                            prepared_prompt=translation_prompt,
+                        )
+                    except Exception as e:                  # timeout / API error
+                        _account_llm_call(state, "translator")
+                        last_error = f"translation call failed: {type(e).__name__}: {str(e)[:200]}"
+                        bump("translation_call_failed")
+                        la.status = "translation_call_failed"
+                        cj = CompileJson(
+                            attempt_status="translation_call_failed",
+                            attempt_kind=attempt_kind,
+                            translator_output_empty=True,
+                            translation_call_error=last_error,
+                        )
+                        failed_result = LLMResult(
+                            prompt=translation.last_prompt,
+                            text="",
+                            model=translation.model,
+                        )
+                        _log_attempt(
+                            logger, la, paths, i, j, k, failed_result,
+                            None, None, cj,
+                        )
+                        events.event(
+                            f"Translator call failed after {_now() - translation_started:.3f}s: "
+                            f"{type(e).__name__}: {str(e)[:200]}",
+                            indent=4, console=True,
+                        )
+                        compiler_feedback = "The previous translation call did not return; keep the output short."
+                        statemgr.save(state); continue
+                    _account_llm_call(state, "translator", t)
+                    la.raw_translator_output_path = logger.write_translation_output(
+                        i, j, k, t.text
+                    )
+                    events.event(
+                        f"Translator response received after {_now() - translation_started:.3f}s "
+                        f"({len(t.text)} chars)",
+                        indent=4, console=True,
+                    )
+                    events.event(
+                        f"Translator response artifact: {la.raw_translator_output_path}",
+                        indent=5,
+                    )
+                    events.event(_usage_event("translator", t), indent=5)
+                    statemgr.save(state)
 
                 pr = parse_translator_output(t.text, attempt_kind)
 
@@ -1363,11 +1606,53 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     indent=4, console=True,
                 )
 
+                aligned, review_report, review_status, review_feedback = semantic_review(
+                    i, j, k, la, action, informal_candidate, attempt_kind,
+                    t, pr, accepted_decls, latest_body,
+                    saved_prompt=(active_resume.saved_prompt
+                                  if reviewer_resume_now else ""),
+                )
+                if not aligned:
+                    status = review_status
+                    cj = build_compile_json(
+                        status, sr, cp, attempt_kind=attempt_kind
+                    )
+                    cj.semantic_review = review_report
+                    _log_attempt(
+                        logger, la, paths, i, j, k, t,
+                        pr.declarations, pr.body, cj,
+                        placeholder=pr.placeholder,
+                    )
+                    la.status = status
+                    bump(status)
+                    last_error = review_feedback
+                    candidate_semantic_feedback = (
+                        "The semantic reviewer rejected the compiling translation: "
+                        + review_feedback
+                    )
+                    compiler_feedback = "Semantic alignment review failed:\n" + review_feedback
+                    repair_context = TranslationRepairContext(
+                        failed_check="semantic_alignment",
+                        raw_output=t.text,
+                        declarations=pr.declarations,
+                        placeholder=pr.placeholder or "",
+                        body=pr.body,
+                        diagnostics=review_feedback,
+                        attempt_kind=attempt_kind,
+                    )
+                    events.event(
+                        f"Compiling transaction rejected by semantic review ({status}); retrying",
+                        indent=4, console=True,
+                    )
+                    statemgr.save(state)
+                    continue
+
                 # ---- both checks passed ----
                 if attempt_kind == "exploration":
                     cj = build_compile_json(
                         "accepted", sr, cp, attempt_kind=attempt_kind
                     )
+                    cj.semantic_review = review_report
                     _log_attempt(
                         logger, la, paths, i, j, k, t,
                         pr.declarations, pr.body, cj,
@@ -1437,6 +1722,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                             "final_success", sr, cp, fc,
                             attempt_kind=attempt_kind,
                         )
+                        cj.semantic_review = review_report
                         _log_attempt(
                             logger, la, paths, i, j, k, t,
                             pr.declarations, pr.body, cj,
@@ -1470,6 +1756,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                         cj = build_compile_json(
                             status, sr, cp, fc, attempt_kind=attempt_kind
                         )
+                        cj.semantic_review = review_report
                         _log_attempt(
                             logger, la, paths, i, j, k, t,
                             pr.declarations, pr.body, cj,
@@ -1508,7 +1795,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 indent=2, console=True,
             )
             failed_next_step = action.next_step
-            reasoning_feedback = candidate_rejection_feedback or (
+            reasoning_feedback = (candidate_rejection_feedback
+                or candidate_semantic_feedback) or (
                 "The step above could not be verified due to being too complex or incorrect. Propose a smaller, "
                 "more direct, or differently formulated step that is translatable to Lean 4. Do not repeat it unchanged."
                 if failed_next_step else
@@ -1538,13 +1826,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
 def resume_problem(run_root: str,
                    reasoning_offline: Optional[List[OfflineResponse]] = None,
-                   translation_offline: Optional[List[OfflineResponse]] = None
+                   translation_offline: Optional[List[OfflineResponse]] = None,
+                   reviewer_offline: Optional[List[OfflineResponse]] = None,
                    ) -> ProofRunState:
     """Resume the earliest interrupted LLM call in a run's terminal step."""
     return run_problem(
         "",
         reasoning_offline=reasoning_offline,
         translation_offline=translation_offline,
+        reviewer_offline=reviewer_offline,
         _resume_root=run_root,
     )
 

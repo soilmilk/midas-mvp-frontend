@@ -21,6 +21,7 @@ GATES = [
     ("Hard Mode inputs", "tests/test_hardmode_inputs.py"),
     ("Reasoning protocol", "tests/test_reasoning_protocol.py"),
     ("Translation protocol", "tests/test_translation_protocol.py"),
+    ("Semantic reviewer", "tests/test_semantic_reviewer_offline.py"),
     ("LLM usage accounting", "tests/test_usage_accounting.py"),
     ("Accepted dataset builder", "tests/test_accepted_dataset.py"),
     ("Hard Mode verifier", "tests/test_hardmode_verifier.py"),

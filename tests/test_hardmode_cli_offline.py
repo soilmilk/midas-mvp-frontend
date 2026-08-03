@@ -21,6 +21,10 @@ PLACEHOLDER_BAD = "def answer : Nat := by\n  exact True"
 PLACEHOLDER_FINAL = "def answer : Nat := by\n  exact 5"
 BODY_INITIAL = "theorem main : IsCorrectAnswer answer := by\n  sorry\n"
 BODY_FINAL = "theorem main : IsCorrectAnswer answer := by\n  exact five_is_correct"
+ALIGNED = (
+    "INTERMEDIATE REASONING:\nThe transaction establishes the requested step.\n\n"
+    "VERDICT: ALIGNED\n\nFEEDBACK:\nNone"
+)
 
 
 def action(next_step: str, *, final=False, answer=None) -> str:
@@ -192,6 +196,7 @@ try:
             transaction("", BODY_FINAL, PLACEHOLDER_BAD),
             transaction("", BODY_FINAL, PLACEHOLDER_FINAL),
         ],
+        reviewer_offline=[ALIGNED] * 10,
     )
     run = runs / "hard_cli"
     check("Phase 4 fixture reaches final success", state.status == "final_success")
@@ -284,6 +289,7 @@ try:
             action("Finish with five.", final=True, answer="5"),
         ],
         translation_offline=["not a parsed translator transaction"],
+        reviewer_offline=[],
     )
     parse_replay = cli(runs, "replay", "hard_parse", 1, 1, 1)
     check("parse-error replay fails in a controlled way",
@@ -314,6 +320,7 @@ try:
                 "theorem main : A = A := by\n  rfl\n```"
             ),
         ],
+        reviewer_offline=[ALIGNED] * 5,
     )
     check("Easy finalization fixture reaches success",
           easy_state.status == "final_success")

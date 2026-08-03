@@ -20,6 +20,10 @@ PLACEHOLDER_INITIAL = "def answer : Nat := by\n  sorry\n"
 BODY_INITIAL = "theorem main : IsCorrectAnswer answer := by\n  sorry\n"
 PLACEHOLDER_FINAL = "def answer : Nat := by\n  exact 5"
 BODY_FINAL = "theorem main : IsCorrectAnswer answer := by\n  exact final_helper"
+ALIGNED = (
+    "INTERMEDIATE REASONING:\nThe compiled transaction proves the requested step.\n\n"
+    "VERDICT: ALIGNED\n\nFEEDBACK:\nNone"
+)
 
 
 def action(next_step: str, proof: str, final=False, answer=None) -> str:
@@ -157,6 +161,7 @@ try:
         runs_root=str(runs),
         reasoning_offline=list(reasoning),
         translation_offline=list(translations),
+        reviewer_offline=[ALIGNED] * 20,
     )
     run = runs / "hard_flow"
 
@@ -282,6 +287,7 @@ try:
                 PLACEHOLDER_FINAL,
             )
         ],
+        reviewer_offline=[ALIGNED] * 5,
     )
     failed_run = runs / "hard_failure"
     check("exhausted finalization follows ordinary step failure",

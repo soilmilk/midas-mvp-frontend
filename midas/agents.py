@@ -1,10 +1,11 @@
 """
-ReasoningAgent (§9) and TranslationAgent (§10).
+ReasoningAgent (§9), TranslationAgent (§10), and the semantic reviewer.
 
-Both route through OpenRouter via the OpenAI-compatible SDK (one key, two models):
+All route through OpenRouter via the OpenAI-compatible SDK (one key, configurable models):
   reasoning   -> openai/gpt-5            (a reasoning model: needs a LARGE max_tokens,
                                           small budgets return empty content)
   translation -> anthropic/claude-sonnet-5
+  reviewer    -> translator model by default
 
 Each agent supports a LIVE backend (real call) and an OFFLINE backend (canned responses,
 for deterministic loop/control-flow tests without spending API calls).
@@ -402,17 +403,29 @@ class TranslationAgent:
         if repair_context is not None:
             if repair_context.attempt_kind != attempt_kind:
                 raise ValueError("repair context attempt kind does not match prompt")
+            feedback_heading = (
+                "### Semantic reviewer feedback"
+                if repair_context.failed_check == "semantic_alignment"
+                else "### All compiler errors and their source locations"
+            )
+            repair_instruction = (
+                "Repair every semantic gap identified by the reviewer. The replacement must "
+                "still compile, but compilation alone is insufficient: prove the reasoner's "
+                "entire stated step without weakening it or assuming it through a proxy."
+                if repair_context.failed_check == "semantic_alignment"
+                else "Fix every compiler error listed above. Use the reported source region and "
+                     "numbered excerpt to repair the exact failing expression."
+            )
             parts.append(
                 "\n## Previous rejected translation — repair this exact output\n\n"
                 f"The `{repair_context.failed_check}` check failed. The complete previous "
                 "translator response is reproduced below.\n\n"
                 "### Complete previous model output\n\n"
                 "<previous_model_output>\n" + repair_context.raw_output.rstrip() + "\n</previous_model_output>\n\n"
-                "### All compiler errors and their source locations\n\n"
+                + feedback_heading + "\n\n"
                 + repair_context.diagnostics.rstrip() + "\n\n"
                 "### Required repair behavior\n\n"
-                "Fix every compiler error listed above. Use the reported source region and "
-                "numbered excerpt to repair the exact failing expression. Preserve unrelated "
+                + repair_instruction + " Preserve unrelated "
                 "working code and the intended English step. Return the complete "
                 f"{output_fields} again; do not return a diff or "
                 "patch. Keep the original theorem header byte-for-byte unchanged."
@@ -429,6 +442,77 @@ class TranslationAgent:
         prompt = prepared_prompt if prepared_prompt is not None else self.build_prompt(*args, **kw)
         self.last_prompt = prompt
         if self.offline is not None:                       # sequential canned queue
+            text = self.offline.pop(0) if self.offline else ""
+            if callable(text):
+                text = text(prompt)
+            if isinstance(text, Exception):
+                raise text
+            return LLMResult(prompt, text, self.model + "[offline]")
+        return _call(self.model, prompt, self.max_tokens,
+                     reasoning_effort=self.reasoning_effort, timeout=timeout)
+
+
+# ---------------- SemanticReviewerAgent ----------------
+class SemanticReviewerAgent:
+    """Fail-closed LLM gate between Lean checkpoint success and acceptance."""
+
+    def __init__(self, model: str, considerations: str,
+                 offline_responses: Optional[List[OfflineResponse]] = None,
+                 max_tokens: int = 16000,
+                 reasoning_effort: Optional[str] = None):
+        self.model = model
+        self.considerations = considerations
+        self.offline = offline_responses
+        self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
+
+    def build_prompt(
+        self,
+        informal_problem: str,
+        informal_candidate: str,
+        current_file: str,
+        translator_output: str,
+        candidate_file: str,
+        *,
+        attempt_kind: AttemptKind,
+        answer: Optional[str] = None,
+    ) -> str:
+        answer_section = (
+            "\n## Proposed concrete answer\n\n" + answer.strip()
+            if answer else ""
+        )
+        return (
+            "You are the semantic alignment gate in a Lean 4 proof-search system. "
+            "The proposed transaction has already passed its Lean declaration and theorem-body "
+            "checkpoint checks. Decide whether it fully formalizes the reasoner's exact English "
+            "step, not merely whether it compiles or makes related progress.\n\n"
+            "Return MISALIGNED when the transaction proves only a useful sublemma, weakens "
+            "quantifiers/hypotheses/domain, assumes or repackages the desired result in a new "
+            "definition or premise, omits a base case or induction/semantic bridge, or leaves the "
+            "requested claim unconnected to the repository's actual formal definitions. A partial "
+            "formalization is a rejection even when it may be useful later. For finalization, also "
+            "check that the filled answer and final theorem express the proposed English answer.\n\n"
+            "Return exactly:\n\n"
+            "INTERMEDIATE REASONING:\n"
+            "<compare the requested claims and proof obligations against the compiled Lean propositions>\n\n"
+            "VERDICT: <ALIGNED | MISALIGNED>\n\n"
+            "FEEDBACK:\n"
+            "<None if aligned; otherwise list the precise missing or weakened obligations and how the translator must repair them>\n\n"
+            "## Problem statement\n\n" + informal_problem +
+            "\n\n## Reasoner's exact step and proof\n\n" + informal_candidate +
+            "\n\n## Attempt kind\n\n" + attempt_kind + answer_section +
+            "\n\n## Formal file before this transaction\n\n```lean4\n" + current_file.rstrip() +
+            "\n```\n\n## Translator's complete response\n\n<translator_output>\n" +
+            translator_output.rstrip() +
+            "\n</translator_output>\n\n## Compiling candidate file\n\n```lean4\n" +
+            candidate_file.rstrip() + "\n```\n\n## Review considerations\n\n" +
+            self.considerations
+        )
+
+    def review(self, *args, timeout: float = None,
+               prepared_prompt: Optional[str] = None, **kw) -> LLMResult:
+        prompt = prepared_prompt if prepared_prompt is not None else self.build_prompt(*args, **kw)
+        if self.offline is not None:
             text = self.offline.pop(0) if self.offline else ""
             if callable(text):
                 text = text(prompt)

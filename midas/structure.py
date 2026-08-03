@@ -60,6 +60,7 @@ _FORBIDDEN_COMMAND = re.compile(
     r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
     r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
     r"include|omit|private|protected|notation|"
+    r"noncomputable|"
     r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
 _NONCOMPUTABLE_DECL = re.compile(
     r"(?m)^[ \t]*noncomputable[ \t]+(?:def|abbrev|instance)\b")

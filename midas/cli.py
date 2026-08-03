@@ -130,9 +130,9 @@ def cmd_attempts(args):
     p = Paths(os.path.dirname(root), os.path.basename(root))
     print(
         f"{'step':>4} {'cand':>4} {'att':>4}  {'kind':<18} "
-        f"{'status':<34} {'declarations?':<13} placeholder?"
+        f"{'status':<34} {'review':<11} {'declarations?':<13} placeholder?"
     )
-    print("-" * 100)
+    print("-" * 112)
     for ps in st.proof_steps:
         if args.step and ps.proof_step_index != args.step:
             continue
@@ -152,10 +152,17 @@ def cmd_attempts(args):
                     txt = open(declarations_path).read()
                     has_decl = "yes" if re.search(r"(?m)^\s*(theorem|lemma|def)\b", txt) else "empty"
                 has_placeholder = "yes" if os.path.exists(placeholder_path) else "no"
+                review = (
+                    la.semantic_review_attempts[-1].verdict.lower()
+                    if la.semantic_review_attempts
+                    and la.semantic_review_attempts[-1].verdict
+                    else la.semantic_review_attempts[-1].status
+                    if la.semantic_review_attempts else "not_run"
+                )
                 print(f"{ps.proof_step_index:>4} {ic.informal_candidate_index:>4} "
                       f"{la.lean_translation_attempt_index:>4}  "
                       f"{la.attempt_kind:<18} {la.status:<34} "
-                      f"{has_decl:<13} {has_placeholder}")
+                      f"{review:<11} {has_decl:<13} {has_placeholder}")
 
 
 def _la_dir(root, i, j, k):
@@ -195,6 +202,20 @@ def cmd_show(args):
         source_path = os.path.join(lad, name)
         if os.path.exists(source_path):
             dump(title, source_path)
+    reviews_root = os.path.join(lad, "semantic_reviews")
+    if os.path.isdir(reviews_root):
+        for name in sorted(os.listdir(reviews_root)):
+            review_dir = os.path.join(reviews_root, name)
+            if not os.path.isdir(review_dir):
+                continue
+            for title, filename in (
+                ("SEMANTIC REVIEW PROMPT", "reviewer_prompt.md"),
+                ("RAW SEMANTIC REVIEW OUTPUT", "raw_reviewer_output.md"),
+                ("SEMANTIC REVIEW CALL ERROR", "reviewer_call_error.txt"),
+            ):
+                path = os.path.join(review_dir, filename)
+                if os.path.exists(path):
+                    dump(f"{title} ({name})", path)
     dump("compile.json", os.path.join(lad, "compile.json"))
 
 
@@ -357,6 +378,13 @@ def cmd_replay(args):
         "— no LLM call\n"
     )
     print(f"original_status   : {original_status}")
+    semantic_data = compile_data.get("semantic_review") or {}
+    semantic_status = semantic_data.get("status", "not_run")
+    semantic_verdict = semantic_data.get("verdict", "")
+    print(
+        "semantic_review : "
+        + ((semantic_verdict or semantic_status) + " (saved; not replayed)")
+    )
     print(f"structure_check   : {'passed' if structure.ok else 'failed'}")
     for violation in structure.violations:
         print(f"    {violation}")
@@ -430,7 +458,8 @@ def cmd_replay(args):
             }
             for error in final_result.errors
         ])
-    replay_accepted = cp.accepted and final_ok
+    semantic_accepted = semantic_status in ("not_run", "passed")
+    replay_accepted = cp.accepted and final_ok and semantic_accepted
     original_accepted = original_status in ("accepted", "final_success")
     print(f"=> {'ACCEPTED (would advance)' if replay_accepted else 'REJECTED'}")
     print(

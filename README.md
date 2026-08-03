@@ -211,11 +211,18 @@ Example `config.json`:
   ],
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",
+  "reviewer_model": "openai/gpt-5",
   "reasoning_effort": "low",
   "translator_reasoning_effort": "low",
+  "reviewer_reasoning_effort": "low",
+  "max_reviewer_call_attempts": 2,
   "verifier_backend": "warm"
 }
 ```
+
+Semantic review is mandatory after every compiling translator transaction. If `reviewer_model`
+or `reviewer_reasoning_effort` is omitted, it inherits the translator setting. A reviewer outage
+or malformed response is retried up to `max_reviewer_call_attempts`, then fails closed.
 
 - `lean_prelude` contains full Lean lines, prepended verbatim.
 - `reasoning_effort` is `minimal | low | medium | high`. It is the largest latency lever;
@@ -390,7 +397,8 @@ Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts 
 `declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
 their proposed `placeholder.lean`. Every compiled attempt also retains
 `declaration_check_input.lean` and `body_check_input.lean`; final attempts retain
-`final_check_input.lean`. Failed final proposals remain attempt artifacts only.
+`final_check_input.lean`. Compile-passing attempts retain reviewer prompts, outputs, and errors under
+`semantic_reviews/reviewer_attempt_NNN/`. Failed final proposals remain attempt artifacts only.
 
 Artifacts are persisted in stages: pending state and prompts before model calls, raw responses
 before parsing, parsed Lean regions before verification, and compile reports after verification.
@@ -415,7 +423,7 @@ The accepted final proof step also contains its declarations, filled placeholder
 
 Common statuses are:
 
-`pending · translation_call_failed · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
+`pending · translation_call_failed · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · semantic_misalignment · reviewer_call_failed · reviewer_parse_error · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
 
 - **`translation_call_failed`** — the translator call returned no response. The attempt directory
   retains the prompt, an empty `raw_translator_output.md`, and the exception in `compile.json`;
@@ -424,8 +432,12 @@ Common statuses are:
 - **`format_failed` / `placeholder_format_failed`** — parsed output broke a structural rule.
 - **`lemma_failed` / `body_failed`** — the declaration / body compile failed.
 - **`placeholder_fill_failed`** — a Hard final suffix failed in the filled-placeholder region.
+- **`semantic_misalignment`** — Lean compiled, but the reviewer found that the transaction did not
+  establish the reasoner's complete English step. Its feedback is sent to the next translator attempt.
+- **`reviewer_call_failed` / `reviewer_parse_error`** — semantic review remained unavailable after
+  its configured retries. The attempt fails closed.
 - **`accepted`** — a non-final action passed both checkpoint stages. The theorem body is not
-  required to contain `sorry`; finality comes only from the reasoner's explicit signal.
+  required to contain `sorry`; it also passed semantic alignment review.
 - **`final_success`** — the selected final transaction and independently reconstructed
   `final/solution.lean` compile without `sorry`.
 - **`final_reconstruction_failed` / `hard_full_reconstruction_failed`** — checkpoint verification
@@ -446,11 +458,11 @@ problem run directory: rename that directory before starting the problem again.
 | command | what it does |
 |---|---|
 | `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree, `state.json`, and `log.txt`; refuses an existing run folder. |
-| `resume <problem_id>` | Resume the earliest interrupted reasoner or translator call in the terminal failed proof step. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
+| `resume <problem_id>` | Resume the earliest interrupted reasoner, translator, or reviewer call in the terminal failed proof step. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
 | `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
 | `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
 | `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |
-| `replay <problem_id> <step> <cand> <attempt>` | Recompile one saved transaction with its original attempt kind and configured backend; no LLM call. |
+| `replay <problem_id> <step> <cand> <attempt>` | Recompile one saved transaction and display its saved semantic verdict; no LLM call. |
 
 Examples:
 ```bash
@@ -479,9 +491,10 @@ resume invocation.
 
 ## Training / modifying it
 
-The system's behavior is shaped by two prompt files the models read on every call:
+The system's behavior is shaped by three prompt files the models read on every call:
 - `considerations/INFORMAL_REASONING_CONSIDERATIONS.md` — rules for the reasoner (§9).
 - `considerations/FORMAL_TRANSLATION_CONSIDERATIONS.md` — rules for the translator (§10).
+- `considerations/SEMANTIC_REVIEW_CONSIDERATIONS.md` — strict alignment criteria for compiling transactions.
 
 NOTE: When testing/running proofs, please put your findings here instead of directly editing the prompts, we will accumulate all of y'alls feedback and then edit accordingly.
 https://docs.google.com/document/d/1dXjaZKxNOavIGCYk2uyY2fPjsBhnSYR5mQ_5L5mlsu0/edit?usp=sharing

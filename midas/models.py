@@ -50,6 +50,11 @@ class Config(BaseModel):
     # None leaves the translator model/provider default in effect. Set this explicitly
     # for thinking models so hidden reasoning cannot unexpectedly consume the response budget.
     translator_reasoning_effort: Optional[ReasoningEffort] = None
+    # Semantic review is mandatory.  A missing reviewer model/effort inherits
+    # the translator settings so existing problem configs remain valid.
+    reviewer_model: Optional[str] = None
+    reviewer_reasoning_effort: Optional[ReasoningEffort] = None
+    max_reviewer_call_attempts: int = Field(default=2, ge=1)
     # "fresh" = fresh `lean` per checkpoint (default). "warm" = in-repo warm server
     # (Mathlib resident, paid once) — for a Mathlib prelude. See INTEGRATION.md.
     verifier_backend: str = "fresh"
@@ -74,6 +79,12 @@ class CheckReport(BaseModel):
     errors: List[Diagnostic] = Field(default_factory=list)
 
 
+class SemanticReviewReport(BaseModel):
+    status: str = "not_run"  # passed | failed | call_failed | parse_error | not_run
+    verdict: str = ""
+    feedback: str = ""
+
+
 class CompileJson(BaseModel):
     attempt_status: str              # §17 lean_translation_attempt.status
     attempt_kind: AttemptKind = "exploration"
@@ -85,10 +96,21 @@ class CompileJson(BaseModel):
     declaration_check: CheckReport = Field(default_factory=CheckReport)
     body_check: CheckReport = Field(default_factory=CheckReport)
     final_check: CheckReport = Field(default_factory=CheckReport)
+    semantic_review: SemanticReviewReport = Field(default_factory=SemanticReviewReport)
     raw_verifier_output: str = ""
 
 
 # ---------------- state hierarchy (§5, §17) ----------------
+class SemanticReviewAttempt(BaseModel):
+    semantic_review_attempt_index: int
+    status: str = "pending"  # pending | passed | failed | call_failed | parse_error
+    prompt_path: Optional[str] = None
+    raw_output_path: Optional[str] = None
+    call_error_path: Optional[str] = None
+    verdict: str = ""
+    feedback: str = ""
+
+
 class LeanTranslationAttempt(BaseModel):
     lean_translation_attempt_index: int
     # pending | translation_call_failed | translator_rejected_step
@@ -113,6 +135,7 @@ class LeanTranslationAttempt(BaseModel):
     proposed_final_answer: Optional[str] = None
     translator_rejection_kind: str = ""
     translator_rejection_reason: str = ""
+    semantic_review_attempts: List[SemanticReviewAttempt] = Field(default_factory=list)
 
 
 class InformalCandidate(BaseModel):
@@ -155,6 +178,7 @@ class LLMUsageBreakdown(BaseModel):
     total: LLMUsageStats = Field(default_factory=LLMUsageStats)
     reasoner: LLMUsageStats = Field(default_factory=LLMUsageStats)
     translator: LLMUsageStats = Field(default_factory=LLMUsageStats)
+    reviewer: LLMUsageStats = Field(default_factory=LLMUsageStats)
 
 
 class RunStats(BaseModel):

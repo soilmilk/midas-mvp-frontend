@@ -21,6 +21,9 @@ _TRANSLATOR_PREAMBLE_HEADING = re.compile(
 _TRANSLATOR_REJECTION_HEADING = re.compile(
     r"(?m)^[ \t]*(TRANSLATION REJECTED|KIND|REASON):[ \t]*(.*)$"
 )
+_REVIEWER_HEADING = re.compile(
+    r"(?m)^[ \t]*(INTERMEDIATE REASONING|VERDICT|FEEDBACK):[ \t]*(.*)$"
+)
 TRANSLATOR_REJECTION_KINDS = {
     "MATHEMATICALLY_INCORRECT",
     "MISSING_ASSUMPTION",
@@ -54,6 +57,15 @@ class ParseResult:
     rejected: bool = False
     rejection_kind: str = ""
     rejection_reason: str = ""
+    error: str = ""
+
+
+@dataclass
+class SemanticReviewResult:
+    ok: bool
+    verdict: str = ""
+    feedback: str = ""
+    reasoning: str = ""
     error: str = ""
 
 
@@ -284,3 +296,40 @@ def parse_translator_output(
             error="FILLED PLACEHOLDER code block is empty",
         )
     return ParseResult(True, declarations, body, placeholder=placeholder)
+
+
+def parse_semantic_review(raw: str) -> SemanticReviewResult:
+    """Parse the strict semantic-review gate response."""
+    matches = list(_REVIEWER_HEADING.finditer(raw or ""))
+    names = [match.group(1) for match in matches]
+    expected = ["INTERMEDIATE REASONING", "VERDICT", "FEEDBACK"]
+    if names != expected:
+        return SemanticReviewResult(
+            False,
+            error=("reviewer output requires exactly these sections in order: "
+                   + ", ".join(expected)),
+        )
+    if raw[:matches[0].start()].strip():
+        return SemanticReviewResult(
+            False, error="INTERMEDIATE REASONING must be the first reviewer section"
+        )
+    values = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        values[match.group(1)] = (
+            match.group(2) + raw[match.end():end]
+        ).strip()
+    if not values["INTERMEDIATE REASONING"]:
+        return SemanticReviewResult(False, error="reviewer reasoning must be non-empty")
+    if values["VERDICT"] not in ("ALIGNED", "MISALIGNED"):
+        return SemanticReviewResult(
+            False, error="VERDICT must be exactly ALIGNED or MISALIGNED"
+        )
+    if not values["FEEDBACK"]:
+        return SemanticReviewResult(False, error="FEEDBACK must be non-empty")
+    return SemanticReviewResult(
+        True,
+        verdict=values["VERDICT"],
+        feedback=values["FEEDBACK"],
+        reasoning=values["INTERMEDIATE REASONING"],
+    )

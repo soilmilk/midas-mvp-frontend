@@ -69,10 +69,17 @@ translated = LLMResult(
 )
 _account_llm_call(state, "translator", translated)
 _account_llm_call(state, "translator")  # failed call: count it, estimate nothing
+reviewed = LLMResult(
+    prompt="review", text="ALIGNED", model="resolved/reviewer",
+    prompt_tokens=80, completion_tokens=20, total_tokens=100,
+    cost_credits=0.01,
+)
+_account_llm_call(state, "reviewer", reviewed)
 
 total = state.stats.llm_usage.total
 reasoner = state.stats.llm_usage.reasoner
 translator = state.stats.llm_usage.translator
+reviewer = state.stats.llm_usage.reviewer
 legacy = ProofRunState.model_validate({
     "problem_id": "legacy",
     "informal_problem_path": "informal.md",
@@ -92,16 +99,17 @@ checks = [
         extracted.cached_tokens == 40 and extracted.cost_credits == 0.0125
     )),
     check("overall tokens and cost aggregate exactly", (
-        state.stats.total_llm_calls == 3 and total.calls == 3 and
-        total.calls_with_token_usage == 2 and total.calls_with_cost == 2 and
-        total.prompt_tokens == 320 and total.completion_tokens == 85 and
-        total.total_tokens == 405 and total.reasoning_tokens == 11 and
-        total.cached_tokens == 65 and abs(total.cost_credits - 0.0325) < 1e-12
+        state.stats.total_llm_calls == 4 and total.calls == 4 and
+        total.calls_with_token_usage == 3 and total.calls_with_cost == 3 and
+        total.prompt_tokens == 400 and total.completion_tokens == 105 and
+        total.total_tokens == 505 and total.reasoning_tokens == 11 and
+        total.cached_tokens == 65 and abs(total.cost_credits - 0.0425) < 1e-12
     )),
     check("reasoner and translator subtotals stay separate", (
         reasoner.calls == 1 and reasoner.total_tokens == 155 and
         translator.calls == 2 and translator.calls_with_cost == 1 and
-        translator.total_tokens == 250
+        translator.total_tokens == 250 and reviewer.calls == 1 and
+        reviewer.total_tokens == 100
     )),
     check("per-call log rendering includes provider accounting", (
         "model=resolved/reasoner" in _usage_event("reasoner", extracted) and
@@ -109,9 +117,9 @@ checks = [
         "cost_credits=0.0125" in _usage_event("reasoner", extracted)
     )),
     check("totals rendering exposes accounting coverage", (
-        "accounted_token_calls=2/3" in _usage_totals(total) and
-        "accounted_cost_calls=2/3" in _usage_totals(total) and
-        "cost_credits=0.0325" in _usage_totals(total)
+        "accounted_token_calls=3/4" in _usage_totals(total) and
+        "accounted_cost_calls=3/4" in _usage_totals(total) and
+        "cost_credits=0.0425" in _usage_totals(total)
     )),
     check("legacy state defaults new usage structure", (
         legacy.stats.total_llm_calls == 4 and

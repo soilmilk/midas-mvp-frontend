@@ -62,6 +62,11 @@ def R(next_step, proof, final=False, idea="[High] Continue the proof.", usefulne
         f"IDEAS FOR THE FUTURE:\n{idea}"
     )
 
+ALIGNED = (
+    "INTERMEDIATE REASONING:\nThe compiled transaction proves the requested step.\n\n"
+    "VERDICT: ALIGNED\n\nFEEDBACK:\nNone"
+)
+
 reasoning = [
     fail_reasoning_after_inspection,                                                # candidate1: failed call
     R("Show both of these facts:\nA = 5 and B = 5.", "Evaluate both expressions.",
@@ -107,6 +112,7 @@ with redirect_stdout(console_capture):
         runs_root=RUNS,
         reasoning_offline=list(reasoning),
         translation_offline=list(translation),
+        reviewer_offline=[ALIGNED] * 20,
     )
 console_output = console_capture.getvalue()
 
@@ -153,7 +159,8 @@ log_before_collision = open(log_path).read()
 state_before_collision = open(os.path.join(root, "state.json")).read()
 collision_error = ""
 try:
-    run_problem(PROB, runs_root=RUNS, reasoning_offline=[], translation_offline=[])
+    run_problem(PROB, runs_root=RUNS, reasoning_offline=[], translation_offline=[],
+                reviewer_offline=[])
 except RunDirectoryExistsError as error:
     collision_error = str(error)
 checks.append(("existing run directory is rejected with rename instruction",
@@ -387,7 +394,8 @@ checks.append(("state stores translator rejection metadata",
 usage = st.stats.llm_usage
 checks.append(("offline usage accounts calls without inventing cost",
                usage.total.calls == st.stats.total_llm_calls and
-               usage.total.calls == usage.reasoner.calls + usage.translator.calls and
+               usage.total.calls == (usage.reasoner.calls + usage.translator.calls +
+                                     usage.reviewer.calls) and
                usage.total.calls_with_token_usage == 0 and
                usage.total.calls_with_cost == 0 and
                usage.total.cost_credits == 0))

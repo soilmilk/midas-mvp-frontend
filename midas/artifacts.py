@@ -4,7 +4,7 @@ Artifact layout (§6) + LeanArtifactLogger + StateManager persistence.
 Exact §6 tree:
   runs/<pid>/ config.json state.json log.txt
     input/ (informal_problem.md context.lean [placeholder.lean] body_initial.lean *_check.json)
-    artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{prompt,output,parsed Lean,check inputs,compile.json}
+    artifacts/proof_steps/proof_step_NNN/informal_candidate_NNN/{reasoning_prompt.md,informal_step.md}/lean4_attempt_NNN/{prompt,output,parsed Lean,check inputs,semantic_reviews/,compile.json}
     accepted/proof_step_NNN/{declarations.lean,[placeholder.lean],body.lean}
     tmp/ final/{solution.lean,solution.md,[placeholder.lean],body.lean}
     failure/{failure_report.md,...}
@@ -36,6 +36,8 @@ class Paths:
     def ps(self, i):  return os.path.join(self.artifacts, f"proof_step_{i:03d}")
     def ic(self, i, j):  return os.path.join(self.ps(i), f"informal_candidate_{j:03d}")
     def la(self, i, j, k):  return os.path.join(self.ic(i, j), f"lean4_attempt_{k:03d}")
+    def review(self, i, j, k, r):
+        return os.path.join(self.la(i, j, k), "semantic_reviews", f"reviewer_attempt_{r:03d}")
     def accepted_ps(self, i):  return os.path.join(self.accepted, f"proof_step_{i:03d}")
 
 
@@ -162,6 +164,21 @@ class LeanArtifactLogger:
     def write_attempt_source(self, i, j, k, name: str, source: str):
         path = os.path.join(self.p.la(i, j, k), name)
         _w(path, source)
+        return path
+
+    def write_reviewer_prompt(self, i, j, k, r, prompt: str):
+        path = os.path.join(self.p.review(i, j, k, r), "reviewer_prompt.md")
+        _w(path, prompt)
+        return path
+
+    def write_reviewer_output(self, i, j, k, r, raw: str):
+        path = os.path.join(self.p.review(i, j, k, r), "raw_reviewer_output.md")
+        _w(path, raw)
+        return path
+
+    def write_reviewer_error(self, i, j, k, r, error: str):
+        path = os.path.join(self.p.review(i, j, k, r), "reviewer_call_error.txt")
+        _w(path, error)
         return path
 
     def write_compile(self, i, j, k, cj: CompileJson):
