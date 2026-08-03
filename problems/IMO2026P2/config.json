@@ -11,10 +11,14 @@
     "open scoped BigOperators",
     "open scoped EuclideanGeometry"
   ],
-  "reasoning_model": "google/gemini-3.1-pro-preview",
-  "translation_model": "google/gemini-3.1-pro-preview",
+  "reasoning_model": "openai/gpt-5.6-sol-pro",
+  "translation_model": "openai/gpt-5.6-sol-pro",
+  "reviewer_model": "openai/gpt-5.6-sol-pro",
+
   "reasoning_effort": "medium",
   "translator_reasoning_effort": "medium",
+  "reviewer_reasoning_effort": "medium",
+  
   "verifier_backend": "warm",
   "problem_mode": "easy"
 }
