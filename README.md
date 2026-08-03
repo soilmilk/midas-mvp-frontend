@@ -446,6 +446,7 @@ problem run directory: rename that directory before starting the problem again.
 | command | what it does |
 |---|---|
 | `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree, `state.json`, and `log.txt`; refuses an existing run folder. |
+| `resume <problem_id>` | Resume the earliest interrupted reasoner or translator call in the terminal failed proof step. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
 | `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
 | `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
 | `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |
@@ -454,10 +455,25 @@ problem run directory: rename that directory before starting the problem again.
 Examples:
 ```bash
 python3 -m midas.cli status hard_problem
+python3 -m midas.cli resume IMO2026P3
 python3 -m midas.cli attempts p2_lemma --failed-only
 python3 -m midas.cli show p3_imo 4 1 1        # proof_step_004 / candidate 1 / attempt 1
 python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
 ```
+
+### Resuming an interrupted run
+
+`resume` is intentionally automatic: it examines only the terminal failed or incomplete proof
+step and selects the earliest provider call recorded as failed or pending. A failed translator call
+reuses the saved informal candidate and prior compiler-repair transaction; a failed reasoner call
+regenerates that candidate. Runs that completed successfully, or failed without an interrupted LLM
+call, are not resumable.
+
+Before continuing, Midas moves every artifact at and after the selected checkpoint plus the old
+failure report into `runs/<problem_id>/archive/resume_<timestamp>/`. The original `state.json` is
+stored there as well. `log.txt` is appended with a new resume-session delimiter. LLM usage, Lean
+attempts, compiles, and runtime remain cumulative, while the runtime deadline starts fresh for each
+resume invocation.
 
 ---
 

@@ -72,9 +72,18 @@ def _call(model: str, prompt: str, max_tokens: int, reasoning_effort: str = None
     u = r.usage
     completion_details = getattr(u, "completion_tokens_details", None)
     prompt_details = getattr(u, "prompt_tokens_details", None)
+    choices = getattr(r, "choices", None)
+    if not choices:
+        raise RuntimeError(
+            "provider returned no completion choices; check available credits "
+            "and provider status"
+        )
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        raise RuntimeError("provider returned a completion without a message")
     return LLMResult(
         prompt=prompt,
-        text=(r.choices[0].message.content or "").strip(),
+        text=(getattr(message, "content", None) or "").strip(),
         model=r.model,
         prompt_tokens=getattr(u, "prompt_tokens", None),
         completion_tokens=getattr(u, "completion_tokens", None),

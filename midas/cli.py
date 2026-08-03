@@ -3,6 +3,7 @@
 midas-mvp CLI (SPEC Phase 5). Usable without reading source:
 
   python3 -m midas.cli run <problem>          # id or dir: p4_n5_30  OR  problems/p4_n5_30
+  python3 -m midas.cli resume <problem_id>    # continue an interrupted terminal proof step
   python3 -m midas.cli status <problem_id>
   python3 -m midas.cli attempts <problem_id> [--step N] [--failed-only]
   python3 -m midas.cli show <problem_id> <step> <candidate> <attempt>
@@ -71,6 +72,26 @@ def cmd_run(args):
         )
     except RunDirectoryExistsError as error:
         sys.exit(str(error))
+    print(f"{state.problem_id}: {state.status}"
+          + (f" ({state.failure_reason})" if state.failure_reason else "")
+          + f"  | accepted={state.stats.accepted_proof_steps} llm={state.stats.total_llm_calls} "
+            f"compiles={state.stats.total_lean_compiles} attempts={state.stats.total_lean_attempts} "
+            f"runtime={state.stats.runtime_seconds:.0f}s "
+            + _usage_summary(state.stats.llm_usage.total))
+
+
+def cmd_resume(args):
+    from midas.loop import resume_problem
+    root = _run_root(args, args.problem_id)
+    if not os.path.exists(os.path.join(root, "state.json")):
+        sys.exit(f"no run found at {root} (run it first)")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        print("warning: OPENROUTER_API_KEY not set — live agents will fail. `source ~/.midas-mvp.env`",
+              file=sys.stderr)
+    try:
+        state = resume_problem(root)
+    except ValueError as error:
+        sys.exit(f"cannot resume {args.problem_id}: {error}")
     print(f"{state.problem_id}: {state.status}"
           + (f" ({state.failure_reason})" if state.failure_reason else "")
           + f"  | accepted={state.stats.accepted_proof_steps} llm={state.stats.total_llm_calls} "
@@ -427,6 +448,13 @@ def main(argv=None):
     r.add_argument("problem_dir", metavar="problem",
                    help="problem id or directory, e.g. p4_n5_30 or problems/p4_n5_30")
     r.set_defaults(fn=cmd_run)
+
+    rs = sub.add_parser(
+        "resume",
+        help="resume the earliest interrupted LLM call in the terminal proof step",
+    )
+    rs.add_argument("problem_id")
+    rs.set_defaults(fn=cmd_resume)
 
     s = sub.add_parser("status", help="show a run's status + step summary")
     s.add_argument("problem_id"); s.set_defaults(fn=cmd_status)

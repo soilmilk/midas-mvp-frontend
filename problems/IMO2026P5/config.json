@@ -1,9 +1,10 @@
 {
+  "problem_mode": "hard",
   "max_proof_steps": 80,
   "max_informal_candidates_per_proof_step": 3,
   "max_lean_translation_attempts_per_candidate": 3,
   "max_total_lean_attempts": 180,
-  "max_runtime_seconds": 10800,
+  "max_runtime_seconds": 14400,
   "lean_prelude": [
     "import Mathlib",
     "import Aesop",
@@ -13,5 +14,7 @@
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",
   "reasoning_effort": "high",
-  "verifier_backend": "warm"
+  "verifier_backend": "warm",
+  "warm_binary": "",
+  "warm_lean_path": ""
 }

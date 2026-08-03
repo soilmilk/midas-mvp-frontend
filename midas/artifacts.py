@@ -53,14 +53,18 @@ class RunDirectoryExistsError(FileExistsError):
 class RunEventLogger:
     """Elapsed-time event log with a concise, opt-in console mirror."""
 
-    def __init__(self, paths: Paths):
-        try:
-            os.makedirs(paths.root, exist_ok=False)
-        except FileExistsError as error:
-            raise RunDirectoryExistsError(paths.root) from error
+    def __init__(self, paths: Paths, *, resume: bool = False):
+        if resume:
+            if not os.path.isdir(paths.root):
+                raise FileNotFoundError(paths.root)
+        else:
+            try:
+                os.makedirs(paths.root, exist_ok=False)
+            except FileExistsError as error:
+                raise RunDirectoryExistsError(paths.root) from error
         self.path = paths.log
         self._started_ns = time.monotonic_ns()
-        self._file = open(self.path, "x", buffering=1)
+        self._file = open(self.path, "a" if resume else "x", buffering=1)
 
     @staticmethod
     def _timestamp(elapsed_ms: int) -> str:

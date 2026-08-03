@@ -3,12 +3,14 @@ The core MVP loop — SPEC.md §18, wiring §21's modules. LimitController (§2/
 FailureController (§16) live here. Entry point: run_problem().
 """
 from __future__ import annotations
-import os, re, time
+import json, os, re, shutil, time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from .models import (AcceptedKnowledge, ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
                      RunStats, LLMUsageStats, CheckReport, CompileJson, Diagnostic,
-                     attempt_kind_for)
+                     Config, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgent,
                      TranslationRepairContext)
@@ -310,28 +312,286 @@ themselves were wrong or too large, tighten INFORMAL_REASONING_CONSIDERATIONS.md
         self.logger.write_failure(report, last_verified, last_body)
 
 
+@dataclass
+class _ResumeCursor:
+    step: int
+    candidate: int
+    attempt: Optional[int]
+    kind: str                         # reasoner | translator
+    saved_prompt: str = ""
+    archive_root: str = ""
+
+
+def _load_saved_problem(root: str, state: ProofRunState) -> Problem:
+    """Load the immutable problem snapshot stored with a run."""
+    input_root = os.path.join(root, "input")
+    config = Config(**json.load(open(os.path.join(root, "config.json"))))
+    informal_path = os.path.join(input_root, "informal_problem.md")
+    context_path = os.path.join(input_root, "context.lean")
+    body_path = os.path.join(input_root, "body_initial.lean")
+    placeholder_path = os.path.join(input_root, "placeholder.lean")
+    placeholder = (
+        open(placeholder_path).read() if os.path.isfile(placeholder_path) else None
+    )
+    return Problem(
+        problem_id=state.problem_id,
+        root=root,
+        config=config,
+        informal_problem=open(informal_path).read(),
+        context=open(context_path).read(),
+        body_initial=open(body_path).read(),
+        context_path=context_path,
+        initial_body_path=body_path,
+        informal_problem_path=informal_path,
+        placeholder=placeholder,
+        placeholder_path=placeholder_path if placeholder is not None else None,
+    )
+
+
+def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
+    if state.status == "final_success":
+        raise ValueError("cannot resume a successful run")
+    terminal = next(
+        (step for step in reversed(state.proof_steps)
+         if step.status not in ("accepted", "final_success")),
+        None,
+    )
+    if terminal is None:
+        raise ValueError("run has no failed or incomplete proof step to resume")
+
+    for candidate in terminal.informal_candidates:
+        # A reasoner failure has no usable informal action or Lean attempts.
+        if candidate.reasoning_call_error_path or (
+            candidate.status == "pending" and not candidate.lean_translation_attempts
+            and (not candidate.informal_step_path
+                 or not os.path.exists(candidate.informal_step_path)
+                 or os.path.getsize(candidate.informal_step_path) == 0)
+        ):
+            return _ResumeCursor(
+                terminal.proof_step_index,
+                candidate.informal_candidate_index,
+                None,
+                "reasoner",
+            )
+        for attempt in candidate.lean_translation_attempts:
+            if attempt.status in ("translation_call_failed", "pending"):
+                prompt = ""
+                if attempt.translator_prompt_path and os.path.exists(
+                    attempt.translator_prompt_path
+                ):
+                    prompt = open(attempt.translator_prompt_path).read()
+                return _ResumeCursor(
+                    terminal.proof_step_index,
+                    candidate.informal_candidate_index,
+                    attempt.lean_translation_attempt_index,
+                    "translator",
+                    saved_prompt=prompt,
+                )
+    raise ValueError(
+        "terminal proof step contains no interrupted reasoner or translator call"
+    )
+
+
+def _validate_resume_prefix(paths: Paths, state: ProofRunState,
+                            cursor: _ResumeCursor):
+    """Fail before archival if the authoritative prefix cannot be rebuilt."""
+    for step in state.proof_steps:
+        if step.proof_step_index >= cursor.step:
+            break
+        if step.status not in ("accepted", "final_success"):
+            raise ValueError(
+                "resume state has a non-accepted step before the selected checkpoint"
+            )
+        accepted_dir = paths.accepted_ps(step.proof_step_index)
+        for filename in ("declarations.lean", "body.lean"):
+            if not os.path.isfile(os.path.join(accepted_dir, filename)):
+                raise ValueError(
+                    f"accepted artifacts missing for proof step "
+                    f"{step.proof_step_index}"
+                )
+    if cursor.kind == "translator":
+        step = next(s for s in state.proof_steps
+                    if s.proof_step_index == cursor.step)
+        candidate = next(c for c in step.informal_candidates
+                         if c.informal_candidate_index == cursor.candidate)
+        if (not candidate.informal_step_path
+                or not os.path.isfile(candidate.informal_step_path)
+                or os.path.getsize(candidate.informal_step_path) == 0):
+            raise ValueError("saved informal candidate is missing")
+
+
+def _archive_and_rewind(paths: Paths, state: ProofRunState,
+                        cursor: _ResumeCursor) -> _ResumeCursor:
+    """Archive the superseded suffix and trim state to the resume boundary."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    archive_root = os.path.join(paths.root, "archive", f"resume_{stamp}")
+    os.makedirs(archive_root, exist_ok=False)
+    shutil.copy2(os.path.join(paths.root, "state.json"),
+                 os.path.join(archive_root, "state.json"))
+
+    def archive(path: str):
+        if not os.path.exists(path):
+            return
+        relative = os.path.relpath(path, paths.root)
+        destination = os.path.join(archive_root, relative)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.move(path, destination)
+
+    step_pos = next(
+        n for n, step in enumerate(state.proof_steps)
+        if step.proof_step_index == cursor.step
+    )
+    step = state.proof_steps[step_pos]
+    candidate_pos = next(
+        n for n, candidate in enumerate(step.informal_candidates)
+        if candidate.informal_candidate_index == cursor.candidate
+    )
+
+    if cursor.kind == "translator":
+        candidate = step.informal_candidates[candidate_pos]
+        assert cursor.attempt is not None
+        for attempt in candidate.lean_translation_attempts:
+            if attempt.lean_translation_attempt_index >= cursor.attempt:
+                archive(paths.la(cursor.step, cursor.candidate,
+                                 attempt.lean_translation_attempt_index))
+        candidate.lean_translation_attempts = [
+            attempt for attempt in candidate.lean_translation_attempts
+            if attempt.lean_translation_attempt_index < cursor.attempt
+        ]
+        candidate.status = "pending"
+        candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
+        step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
+    else:
+        candidates_to_archive = step.informal_candidates[candidate_pos:]
+        step.informal_candidates = step.informal_candidates[:candidate_pos]
+
+    for candidate in candidates_to_archive:
+        archive(paths.ic(cursor.step, candidate.informal_candidate_index))
+
+    for later_step in state.proof_steps[step_pos + 1:]:
+        archive(paths.ps(later_step.proof_step_index))
+        archive(paths.accepted_ps(later_step.proof_step_index))
+    state.proof_steps = state.proof_steps[:step_pos + 1]
+    step.status = "pending"
+
+    archive(paths.failure)
+    archive(paths.final)
+    archive(paths.tmp)
+    state.status = "running"
+    state.failure_reason = None
+    cursor.archive_root = archive_root
+    with open(os.path.join(archive_root, "resume.json"), "w") as f:
+        json.dump({
+            "step": cursor.step,
+            "candidate": cursor.candidate,
+            "attempt": cursor.attempt,
+            "kind": cursor.kind,
+        }, f, indent=2)
+        f.write("\n")
+    return cursor
+
+
+def _resume_repair_context(candidate: InformalCandidate):
+    """Rehydrate the immediately preceding translator repair transaction."""
+    if not candidate.lean_translation_attempts:
+        return "", None
+    previous = candidate.lean_translation_attempts[-1]
+    if previous.status in ("translation_call_failed", "parse_error"):
+        return "", None
+    if not previous.compile_path or not os.path.isfile(previous.compile_path):
+        return "", None
+    compile_json = CompileJson.model_validate_json(open(previous.compile_path).read())
+    report_name = {
+        "lemma_failed": "declaration_check",
+        "body_failed": "body_check",
+        "placeholder_fill_failed": "body_check",
+        "final_reconstruction_failed": "final_check",
+        "hard_full_reconstruction_failed": "final_check",
+    }.get(previous.status, "structure_check")
+    report = getattr(compile_json, report_name)
+    diagnostic_lines = []
+    for error in report.errors:
+        diagnostic_lines.append(
+            f"{error.file}:{error.line}:{error.col}: {error.severity}: "
+            f"{error.message}\nSource region: **{error.source_region or 'unknown'}**"
+            + (f"\nNearby submitted Lean code:\n{error.nearby_code}"
+               if error.nearby_code else "")
+        )
+    diagnostics = "\n\n".join(diagnostic_lines) or previous.status
+    declarations = (
+        open(previous.declarations_path).read()
+        if previous.declarations_path and os.path.isfile(previous.declarations_path)
+        else ""
+    )
+    body = (
+        open(previous.body_path).read()
+        if previous.body_path and os.path.isfile(previous.body_path) else ""
+    )
+    placeholder = (
+        open(previous.placeholder_path).read()
+        if previous.placeholder_path and os.path.isfile(previous.placeholder_path)
+        else ""
+    )
+    raw = (
+        open(previous.raw_translator_output_path).read()
+        if previous.raw_translator_output_path
+        and os.path.isfile(previous.raw_translator_output_path)
+        else ""
+    )
+    feedback = {
+        "declaration_check": "Declaration failed to compile:\n",
+        "body_check": "Body failed to compile:\n",
+        "final_check": "Reconstructed solution failed to compile:\n",
+        "structure_check": "Structure check failed:\n",
+    }[report_name] + diagnostics
+    return feedback, TranslationRepairContext(
+        failed_check=report_name,
+        raw_output=raw,
+        declarations=declarations,
+        placeholder=placeholder,
+        body=body,
+        diagnostics=diagnostics,
+        attempt_kind=previous.attempt_kind,
+    )
+
+
 def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_offline: Optional[List[OfflineResponse]] = None,
-                translation_offline: Optional[List[OfflineResponse]] = None) -> ProofRunState:
-    problem_dir = os.path.abspath(problem_dir)
-    problem_id = os.path.basename(problem_dir.rstrip("/"))
-    runs_root = runs_root or os.path.join(problem_dir, "runs")
-    paths = Paths(runs_root, problem_id)
-    events = RunEventLogger(paths)
-    events.event(f"Run started: {problem_id}", console=True, elapsed_ms=0)
-    events.event(f"Problem directory: {problem_dir}", indent=1)
+                translation_offline: Optional[List[OfflineResponse]] = None,
+                *, _resume_root: Optional[str] = None) -> ProofRunState:
+    resume_cursor = None
+    if _resume_root is not None:
+        resume_root = os.path.abspath(_resume_root)
+        paths = Paths(os.path.dirname(resume_root), os.path.basename(resume_root))
+        statemgr = StateManager(paths)
+        state = statemgr.load(paths.root)
+        resume_cursor = _find_resume_cursor(paths.root, state)
+        _validate_resume_prefix(paths, state, resume_cursor)
+        prob = _load_saved_problem(paths.root, state)
+        problem_dir = paths.root
+        problem_id = state.problem_id
+        events = RunEventLogger(paths, resume=True)
+        events.event("-" * 72, elapsed_ms=0)
+        events.event(f"Resume started: {problem_id}", console=True, elapsed_ms=0)
+    else:
+        problem_dir = os.path.abspath(problem_dir)
+        problem_id = os.path.basename(problem_dir.rstrip("/"))
+        runs_root = runs_root or os.path.join(problem_dir, "runs")
+        paths = Paths(runs_root, problem_id)
+        statemgr = StateManager(paths)
+        events = RunEventLogger(paths)
+        events.event(f"Run started: {problem_id}", console=True, elapsed_ms=0)
+        try:
+            prob = load_problem(problem_dir)
+        except Exception as error:
+            events.event(
+                f"Problem loading failed: {type(error).__name__}: {error}",
+                indent=1, console=True,
+            )
+            events.close()
+            raise
+    events.event(f"Problem snapshot: {problem_dir}", indent=1)
     events.event(f"Run directory: {paths.root}", indent=1)
-    try:
-        prob = load_problem(problem_dir)
-    except Exception as error:
-        events.event(
-            f"Problem loading failed: {type(error).__name__}: {error}",
-            indent=1, console=True,
-        )
-        events.close()
-        raise
-    logger = LeanArtifactLogger(paths)
-    statemgr = StateManager(paths)
     events.event(
         f"Configuration: mode={prob.config.problem_mode}, "
         f"reasoner={prob.config.reasoning_model}, "
@@ -361,24 +621,39 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         events.close()
         raise
 
-    state = ProofRunState(
-        problem_id=prob.problem_id,
-        informal_problem_path=prob.informal_problem_path,
-        context_path=prob.context_path,
-        initial_body_path=prob.initial_body_path,
-        problem_mode=prob.config.problem_mode,
-        placeholder_path=prob.placeholder_path,
-        placeholder_initial_source=prob.placeholder,
-        placeholder_status=(
-            "unresolved" if prob.config.problem_mode == "hard" else None
-        ),
-        stats=RunStats(started_at=time.strftime("%Y-%m-%dT%H:%M:%S")))
-    logger.write_inputs(prob.config.model_dump_json(indent=2),
-                        prob.informal_problem, prob.context, prob.body_initial,
-                        placeholder=prob.placeholder)
+    if resume_cursor is not None:
+        resume_cursor = _archive_and_rewind(paths, state, resume_cursor)
+        logger = LeanArtifactLogger(paths)
+        events.event(
+            f"Resume checkpoint: proof_step_{resume_cursor.step:03d}/"
+            f"informal_candidate_{resume_cursor.candidate:03d}/"
+            + (f"lean4_attempt_{resume_cursor.attempt:03d}"
+               if resume_cursor.attempt is not None else "reasoner_call"),
+            indent=1, console=True,
+        )
+        events.event(f"Superseded suffix archived at {resume_cursor.archive_root}",
+                     indent=1)
+    else:
+        logger = LeanArtifactLogger(paths)
+        state = ProofRunState(
+            problem_id=prob.problem_id,
+            informal_problem_path=prob.informal_problem_path,
+            context_path=prob.context_path,
+            initial_body_path=prob.initial_body_path,
+            problem_mode=prob.config.problem_mode,
+            placeholder_path=prob.placeholder_path,
+            placeholder_initial_source=prob.placeholder,
+            placeholder_status=(
+                "unresolved" if prob.config.problem_mode == "hard" else None
+            ),
+            stats=RunStats(started_at=time.strftime("%Y-%m-%dT%H:%M:%S")))
+        logger.write_inputs(prob.config.model_dump_json(indent=2),
+                            prob.informal_problem, prob.context, prob.body_initial,
+                            placeholder=prob.placeholder)
     statemgr.save(state)
 
     start = _now()
+    previous_runtime = state.stats.runtime_seconds if resume_cursor is not None else 0.0
     deadline = start + prob.config.max_runtime_seconds
     def call_timeout():   # bound every LLM call by the remaining budget so no single call blows it
         return max(2.0, min(150.0, deadline - _now()))
@@ -397,7 +672,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 indent=indent,
             )
     def finish(reason=None):
-        state.stats.runtime_seconds = _now() - start
+        state.stats.runtime_seconds = previous_runtime + (_now() - start)
         statemgr.save(state)
         events.event(
             f"Run finished: status={state.status}"
@@ -495,6 +770,24 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
 
     accepted_decls: List[str] = []
     latest_body = prob.body_initial
+    if resume_cursor is not None:
+        for accepted_step in state.proof_steps:
+            if accepted_step.proof_step_index >= resume_cursor.step:
+                break
+            if accepted_step.status not in ("accepted", "final_success"):
+                raise ValueError(
+                    "resume state has a non-accepted step before the selected checkpoint"
+                )
+            accepted_dir = paths.accepted_ps(accepted_step.proof_step_index)
+            declarations_path = os.path.join(accepted_dir, "declarations.lean")
+            body_path = os.path.join(accepted_dir, "body.lean")
+            if not os.path.isfile(declarations_path) or not os.path.isfile(body_path):
+                raise ValueError(
+                    f"accepted artifacts missing for proof step "
+                    f"{accepted_step.proof_step_index}"
+                )
+            accepted_decls.append(open(declarations_path).read())
+            latest_body = open(body_path).read()
     # ---- main loop (§18) ----
     while state.status == "running":
         lim = limits.exceeded(state)
@@ -507,18 +800,36 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                            latest_body, last_error, category_counts)
             return finish()
 
-        i = len(state.proof_steps) + 1
-        ps = ProofStep(proof_step_index=i)
-        state.proof_steps.append(ps)
-        events.event(f"Proof step {i} started", indent=1, console=True)
+        active_resume = resume_cursor
+        resume_cursor = None
+        if active_resume is not None:
+            i = active_resume.step
+            ps = state.proof_steps[-1]
+            events.event(f"Proof step {i} resumed", indent=1, console=True)
+        else:
+            i = len(state.proof_steps) + 1
+            ps = ProofStep(proof_step_index=i)
+            state.proof_steps.append(ps)
+            events.event(f"Proof step {i} started", indent=1, console=True)
         step_accepted = False
         reasoning_feedback = ""
         failed_next_step = ""
 
-        for j in range(1, prob.config.max_informal_candidates_per_proof_step + 1):
-            ic = InformalCandidate(informal_candidate_index=j)
-            ps.informal_candidates.append(ic)
-            events.event(f"Candidate {j} started", indent=2, console=True)
+        candidate_start = active_resume.candidate if active_resume is not None else 1
+        for j in range(candidate_start,
+                       prob.config.max_informal_candidates_per_proof_step + 1):
+            resuming_translation = (
+                active_resume is not None
+                and active_resume.kind == "translator"
+                and j == active_resume.candidate
+            )
+            if resuming_translation:
+                ic = ps.informal_candidates[-1]
+                events.event(f"Candidate {j} resumed", indent=2, console=True)
+            else:
+                ic = InformalCandidate(informal_candidate_index=j)
+                ps.informal_candidates.append(ic)
+                events.event(f"Candidate {j} started", indent=2, console=True)
             statemgr.save(state)
             if _now() >= deadline:
                 events.event(
@@ -531,65 +842,77 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                                    if problem_mode == "hard" else ""),
                                latest_body, last_error, category_counts)
                 return finish()
-            reasoning_prompt = reasoning.build_prompt(
-                prob.informal_problem,
-                state.current_knowledge,
-                problem_mode=prob.config.problem_mode,
-                failure_feedback=reasoning_feedback,
-                failed_next_step=failed_next_step,
-                future_ideas=state.future_ideas,
-            )
-            ic.reasoning_prompt_path = logger.write_reasoning_prompt(
-                i, j, reasoning_prompt
-            )
-            events.event(
-                f"Reasoning prompt: {ic.reasoning_prompt_path} "
-                f"({len(reasoning_prompt)} chars)",
-                indent=3,
-            )
-            statemgr.save(state)
-            reasoning_timeout = call_timeout()
-            events.event(
-                f"Waiting for reasoner response (model={reasoning.model}, "
-                f"timeout={reasoning_timeout:.1f}s)",
-                indent=3, console=True,
-            )
-            reasoning_started = _now()
-            try:
-                r = reasoning.propose(
-                    attempt_index=j - 1,
-                    timeout=reasoning_timeout,
-                    prepared_prompt=reasoning_prompt,
+            if resuming_translation:
+                if not ic.informal_step_path or not os.path.isfile(
+                    ic.informal_step_path
+                ):
+                    raise ValueError("saved informal candidate is missing")
+                r = LLMResult(
+                    prompt="",
+                    text=open(ic.informal_step_path).read(),
+                    model=reasoning.model + "[saved]",
                 )
-            except Exception as e:                          # timeout / API error — don't crash
-                _account_llm_call(state, "reasoner")
-                last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
-                bump("reasoning_call_failed"); ic.status = "abandoned"
-                ic.informal_step_path = logger.write_reasoning_output(i, j, "")
-                ic.reasoning_call_error_path = logger.write_reasoning_error(
-                    i, j, last_error
+            else:
+                reasoning_prompt = reasoning.build_prompt(
+                    prob.informal_problem,
+                    state.current_knowledge,
+                    problem_mode=prob.config.problem_mode,
+                    failure_feedback=reasoning_feedback,
+                    failed_next_step=failed_next_step,
+                    future_ideas=state.future_ideas,
+                )
+                ic.reasoning_prompt_path = logger.write_reasoning_prompt(
+                    i, j, reasoning_prompt
                 )
                 events.event(
-                    f"Reasoner call failed after {_now() - reasoning_started:.3f}s: "
-                    f"{type(e).__name__}: {str(e)[:200]}",
+                    f"Reasoning prompt: {ic.reasoning_prompt_path} "
+                    f"({len(reasoning_prompt)} chars)",
+                    indent=3,
+                )
+                statemgr.save(state)
+                reasoning_timeout = call_timeout()
+                events.event(
+                    f"Waiting for reasoner response (model={reasoning.model}, "
+                    f"timeout={reasoning_timeout:.1f}s)",
                     indent=3, console=True,
                 )
-                reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
-                failed_next_step = ""
-                statemgr.save(state); continue
-            _account_llm_call(state, "reasoner", r)
-            ic.informal_step_path = logger.write_reasoning_output(i, j, r.text)
-            events.event(
-                f"Reasoner response received after {_now() - reasoning_started:.3f}s "
-                f"({len(r.text)} chars)",
-                indent=3, console=True,
-            )
-            events.event(
-                f"Reasoner response artifact: {ic.informal_step_path}",
-                indent=4,
-            )
-            events.event(_usage_event("reasoner", r), indent=4)
-            statemgr.save(state)
+                reasoning_started = _now()
+                try:
+                    r = reasoning.propose(
+                        attempt_index=j - 1,
+                        timeout=reasoning_timeout,
+                        prepared_prompt=reasoning_prompt,
+                    )
+                except Exception as e:                      # timeout / API error
+                    _account_llm_call(state, "reasoner")
+                    last_error = f"reasoning call failed: {type(e).__name__}: {str(e)[:200]}"
+                    bump("reasoning_call_failed"); ic.status = "abandoned"
+                    ic.informal_step_path = logger.write_reasoning_output(i, j, "")
+                    ic.reasoning_call_error_path = logger.write_reasoning_error(
+                        i, j, last_error
+                    )
+                    events.event(
+                        f"Reasoner call failed after {_now() - reasoning_started:.3f}s: "
+                        f"{type(e).__name__}: {str(e)[:200]}",
+                        indent=3, console=True,
+                    )
+                    reasoning_feedback = "The previous reasoning attempt did not return; propose a simpler step."
+                    failed_next_step = ""
+                    statemgr.save(state); continue
+                _account_llm_call(state, "reasoner", r)
+                ic.informal_step_path = logger.write_reasoning_output(i, j, r.text)
+                ic.reasoning_call_error_path = None
+                events.event(
+                    f"Reasoner response received after {_now() - reasoning_started:.3f}s "
+                    f"({len(r.text)} chars)",
+                    indent=3, console=True,
+                )
+                events.event(
+                    f"Reasoner response artifact: {ic.informal_step_path}",
+                    indent=4,
+                )
+                events.event(_usage_event("reasoner", r), indent=4)
+                statemgr.save(state)
             action = parse_reasoning_action(r.text, prob.config.problem_mode)
 
             if not action.ok:
@@ -624,9 +947,15 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             )
             candidate_accepted = False
             candidate_rejection_feedback = ""
-            compiler_feedback = ""
-            repair_context = None
-            for k in range(1, prob.config.max_lean_translation_attempts_per_candidate + 1):
+            if resuming_translation:
+                compiler_feedback, repair_context = _resume_repair_context(ic)
+                attempt_start = active_resume.attempt
+            else:
+                compiler_feedback = ""
+                repair_context = None
+                attempt_start = 1
+            for k in range(attempt_start,
+                           prob.config.max_lean_translation_attempts_per_candidate + 1):
                 lim = limits.exceeded(state)
                 if lim:
                     events.event(f"Run limit reached: {lim}", indent=3, console=True)
@@ -651,21 +980,25 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     indent=3, console=True,
                 )
                 statemgr.save(state)
-                translation_prompt = translation.build_prompt(
-                    header, prob.informal_problem, prelude, prob.context,
-                    accepted_decls, latest_body, informal_candidate,
-                    compiler_feedback=compiler_feedback,
-                    repair_context=repair_context,
-                    attempt_kind=attempt_kind,
-                    placeholder_header=(
-                        placeholder_header if problem_mode == "hard" else None
-                    ),
-                    placeholder_initial_source=(
-                        placeholder_initial_source
-                        if problem_mode == "hard" else None
-                    ),
-                    answer=action.answer,
-                )
+                if (resuming_translation and k == attempt_start
+                        and active_resume.saved_prompt):
+                    translation_prompt = active_resume.saved_prompt
+                else:
+                    translation_prompt = translation.build_prompt(
+                        header, prob.informal_problem, prelude, prob.context,
+                        accepted_decls, latest_body, informal_candidate,
+                        compiler_feedback=compiler_feedback,
+                        repair_context=repair_context,
+                        attempt_kind=attempt_kind,
+                        placeholder_header=(
+                            placeholder_header if problem_mode == "hard" else None
+                        ),
+                        placeholder_initial_source=(
+                            placeholder_initial_source
+                            if problem_mode == "hard" else None
+                        ),
+                        answer=action.answer,
+                    )
                 la.translator_prompt_path = logger.write_translation_prompt(
                     i, j, k, translation_prompt
                 )
@@ -1201,6 +1534,19 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         statemgr.save(state)
 
     return finish()
+
+
+def resume_problem(run_root: str,
+                   reasoning_offline: Optional[List[OfflineResponse]] = None,
+                   translation_offline: Optional[List[OfflineResponse]] = None
+                   ) -> ProofRunState:
+    """Resume the earliest interrupted LLM call in a run's terminal step."""
+    return run_problem(
+        "",
+        reasoning_offline=reasoning_offline,
+        translation_offline=translation_offline,
+        _resume_root=run_root,
+    )
 
 
 # ---------- helpers ----------

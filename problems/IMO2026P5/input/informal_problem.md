@@ -16,3 +16,4 @@ such that \(f(x) > 0\) for every positive real number \(x\), and such that, for 
 \sqrt{x f(y)}.
 \]
 
+In another word, you need to determine the collection of functions that satisfies the assumptions above, and show that a function satisfies the assumpetions if and only if it is in the collection.
