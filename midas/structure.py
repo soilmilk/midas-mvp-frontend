@@ -59,7 +59,7 @@ _TOP_LEVEL_DECL = re.compile(
 _FORBIDDEN_COMMAND = re.compile(
     r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
     r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
-    r"mutual|include|omit|private|protected|noncomputable|notation|"
+    r"include|omit|private|protected|notation|"
     r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
 _NONCOMPUTABLE_DECL = re.compile(
     r"(?m)^[ \t]*noncomputable[ \t]+(?:def|abbrev|instance)\b")
