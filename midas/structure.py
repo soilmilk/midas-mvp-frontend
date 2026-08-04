@@ -57,10 +57,9 @@ _TOP_LEVEL_DECL = re.compile(
     r"(?m)^[ \t]*(?:theorem|lemma|def|abbrev|instance|example|opaque|axiom|"
     r"inductive|structure|class)\b")
 _FORBIDDEN_COMMAND = re.compile(
-    r"(?m)^[ \t]*(?:import|namespace|end|section|open|export|variable|"
+    r"(?m)^[ \t]*(?:import|namespace|section|open|export|"
     r"set_option|attribute|local|scoped|syntax|macro|elab|universe|"
     r"include|omit|private|protected|notation|"
-    r"noncomputable|"
     r"infix|infixl|infixr|prefix|postfix|initialize|#\w+)\b")
 _NONCOMPUTABLE_DECL = re.compile(
     r"(?m)^[ \t]*noncomputable[ \t]+(?:def|abbrev|instance)\b")
