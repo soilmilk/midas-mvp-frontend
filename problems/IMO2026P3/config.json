@@ -1,7 +1,7 @@
 {
   "max_proof_steps": 100,
-  "max_informal_candidates_per_proof_step": 3,
-  "max_lean_translation_attempts_per_candidate": 3,
+  "max_informal_candidates_per_proof_step": 6,
+  "max_lean_translation_attempts_per_candidate": 6,
   "max_total_lean_attempts": 400,
   "max_runtime_seconds": 21600,
   "lean_prelude": [

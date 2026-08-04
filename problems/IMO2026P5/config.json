@@ -11,9 +11,14 @@
     "set_option maxHeartbeats 0",
     "open BigOperators Real Nat Topology Rat"
   ],
-  "reasoning_model": "openai/gpt-5",
-  "translation_model": "anthropic/claude-sonnet-5",
-  "reasoning_effort": "high",
+  "reasoning_model": "openai/gpt-5.6-sol-pro",
+  "translation_model": "openai/gpt-5.6-sol-pro",
+  "reviewer_model": "openai/gpt-5.6-sol-pro",
+
+  "reasoning_effort": "medium",
+  "translator_reasoning_effort": "medium",
+  "reviewer_reasoning_effort": "medium",
+
   "verifier_backend": "warm",
   "warm_binary": "",
   "warm_lean_path": ""
