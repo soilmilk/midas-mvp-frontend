@@ -1,12 +1,6 @@
 noncomputable section
 
 /-- Sum of the entries at even, zero-based indices.
-    The problem statement says that "Liu and Xiang take turns claiming any unclaimed piece of the stick, with Liu going first."
-    "Each player's goal is to maximize the total length of their own pieces."
-    It is implied that if the final list of segment lengths is x1>=x2>=x3..., then Liu's score is x1+x3+x5....
-    and Xiang's score is x2+x4+x6...
-    This assumption is already represented in the code.
-    This function represent the computation of Liu's (the first player) score.
  -/
 def firstPlayerScore (pieces : List ℝ) : ℝ :=
   (List.mapIdx
