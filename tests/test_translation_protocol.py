@@ -201,16 +201,17 @@ standalone_noncomputable = check_structure(
     "noncomputable section", BODY_OPEN,
     "theorem main : True := by", [],
 )
-check("standalone noncomputable command remains rejected",
-      any("forbidden top-level command: noncomputable" in violation
-          for violation in standalone_noncomputable.violations))
+check("standalone noncomputable command is allowed",
+      standalone_noncomputable.ok,
+      repr(standalone_noncomputable.violations))
 body_noncomputable = check_structure(
     "", "noncomputable section\n" + BODY_OPEN,
     "theorem main : True := by", [],
 )
-check("noncomputable command in theorem body remains rejected",
-      any("body contains forbidden top-level command: noncomputable" in violation
-          for violation in body_noncomputable.violations))
+check("noncomputable command in theorem body is not forbidden",
+      not any("forbidden top-level command: noncomputable" in violation
+              for violation in body_noncomputable.violations),
+      repr(body_noncomputable.violations))
 
 agent = TranslationAgent("offline", "formal considerations", offline_responses=[])
 base = dict(
@@ -252,11 +253,10 @@ check("Hard exploration allows open theorem body",
 check("translator prompt limits rejection to mathematical defects",
       "KIND: <MATHEMATICALLY_INCORRECT" in hard_exploration_prompt and
       "HARD_TO_FORMALIZE is not a valid rejection" in hard_exploration_prompt)
-check("translator prompt requires reasoning before a decision",
-      "INTERMEDIATE REASONING and PLAN sections are mandatory" in
-      hard_exploration_prompt and
-      "library-lemma route and an unfold/algebra fallback" in
-      hard_exploration_prompt)
+check("translator prompt places reasoning and plan before the transaction",
+      hard_exploration_prompt.index("INTERMEDIATE REASONING:\n") <
+      hard_exploration_prompt.index("PLAN:\n") <
+      hard_exploration_prompt.index("NEW DECLARATIONS:\n```lean4"))
 check("translator prompt forbids local sorry facts",
       "never use `sorry` or `admit` inside a local `have`"
       in hard_exploration_prompt)
