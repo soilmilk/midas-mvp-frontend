@@ -1134,7 +1134,11 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 )
                 events.event(_usage_event("reasoner", r), indent=4)
                 statemgr.save(state)
-            action = parse_reasoning_action(r.text, prob.config.problem_mode)
+            action = parse_reasoning_action(
+                r.text,
+                prob.config.problem_mode,
+                allow_legacy_step_usefulness=resuming_transaction,
+            )
 
             if not action.ok:
                 last_error = f"invalid reasoner action: {action.error}"
@@ -1143,8 +1147,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_feedback = (
                     "The previous response was not a valid action: "
                     f"{action.error}. Return one action with non-empty NEXT STEP and PROOF, "
-                    "a STEP USEFULNESS rating, an exact IS_FINAL_STEP "
-                    "Boolean, and non-empty IDEAS FOR THE FUTURE as the final section."
+                    "an exact IS_FINAL_STEP Boolean, and non-empty IDEAS FOR THE "
+                    "FUTURE as the final section."
                 )
                 failed_next_step = ""
                 events.event(
@@ -1154,7 +1158,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 statemgr.save(state)
                 continue
 
-            ic.step_usefulness = action.step_usefulness
             ic.future_ideas = action.future_ideas
             informal_candidate = action.informal_step
             attempt_kind = attempt_kind_for(
@@ -1162,7 +1165,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
             )
             events.event(
                 f"Reasoner action accepted: kind={attempt_kind}, "
-                f"usefulness={action.step_usefulness}, "
                 f"next_step={action.next_step[:200]!r}",
                 indent=3,
             )
@@ -1663,7 +1665,6 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     state.stats.accepted_proof_steps += 1
                     state.current_knowledge.append(AcceptedKnowledge(
                         statement=action.next_step,
-                        step_usefulness=action.step_usefulness,
                     ))
                     state.future_ideas = action.future_ideas
                     candidate_accepted = step_accepted = True

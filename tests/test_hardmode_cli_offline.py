@@ -31,7 +31,6 @@ def action(next_step: str, *, final=False, answer=None) -> str:
     raw = (
         f"NEXT STEP:\n{next_step}\n\n"
         "PROOF:\nThe claim follows directly from the definitions.\n\n"
-        "STEP USEFULNESS:\nHigh\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}"
     )
     if answer is not None:

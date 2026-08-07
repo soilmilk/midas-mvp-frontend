@@ -27,6 +27,7 @@ def _make_run(
     mode: str = "easy",
     failed: bool = False,
     mismatched_final: bool = False,
+    legacy_usefulness: bool = False,
 ) -> Path:
     run = runs / run_id
     prelude = ["import Mathlib"]
@@ -57,8 +58,10 @@ def _make_run(
         "INTERMEDIATE REASONING:\nIgnore this.\n\n"
         "NEXT STEP:\nProve the helper and finish.\n\n"
         "PROOF:\nTrue is immediate.\n\n"
-        "IS_FINAL_STEP: True\n"
     )
+    if legacy_usefulness:
+        informal += "STEP USEFULNESS:\nHigh\n\n"
+    informal += "IS_FINAL_STEP: True\n"
     if mode == "hard":
         informal += "\nANSWER:\nThe answer is 1.\n"
     _write(candidate_dir / "informal_step.md", informal)
@@ -117,7 +120,7 @@ class AcceptedDatasetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             runs = Path(temporary) / "runs"
             runs.mkdir()
-            _make_run(runs, "run_b")
+            _make_run(runs, "run_b", legacy_usefulness=True)
             _make_run(runs, "run_a", mode="hard")
             _make_run(runs, "failed_run", failed=True)
             (runs / "missing_state").mkdir()
@@ -140,6 +143,7 @@ class AcceptedDatasetTests(unittest.TestCase):
             self.assertIn("NEXT STEP:\nProve the helper", first[0]["input"]["next_step"])
             self.assertIn("ANSWER:\nThe answer is 1.", first[0]["input"]["next_step"])
             self.assertNotIn("INTERMEDIATE REASONING", first[0]["input"]["next_step"])
+            self.assertNotIn("STEP USEFULNESS", second[0]["input"]["next_step"])
             self.assertIn("def answer : Nat := by\n  sorry", first[0]["input"]["current_lean4_state"])
             self.assertIn("def answer : Nat := by\n  exact 1", first[0]["output"]["next_lean4_state"])
 

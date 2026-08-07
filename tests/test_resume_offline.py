@@ -36,7 +36,6 @@ def R(next_step, proof, *, final=False):
     return (
         f"NEXT STEP:\n{next_step}\n\n"
         f"PROOF:\n{proof}\n\n"
-        "STEP USEFULNESS:\nHigh\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}\n\n"
         f"IDEAS FOR THE FUTURE:\n"
         f"{'None — the theorem is complete' if final else '[High] Finish next.'}"
@@ -89,6 +88,29 @@ failed_calls = failed.stats.total_llm_calls
 failed_runtime = failed.stats.runtime_seconds
 checks.append(("translator fixture fails", failed.status == "failed"))
 
+# Simulate a run created by the previous protocol. Resume must tolerate both the
+# retired state metadata and its saved reasoner action without reintroducing the
+# field for new calls or newly serialized state.
+legacy_candidate = os.path.join(
+    translator_root, "artifacts", "proof_steps", "proof_step_001",
+    "informal_candidate_001", "informal_step.md",
+)
+legacy_text = open(legacy_candidate).read().replace(
+    "IS_FINAL_STEP: False",
+    "STEP USEFULNESS:\nHigh\n\nIS_FINAL_STEP: False",
+)
+with open(legacy_candidate, "w") as f:
+    f.write(legacy_text)
+legacy_state_path = os.path.join(translator_root, "state.json")
+legacy_state = json.load(open(legacy_state_path))
+legacy_state["current_knowledge"] = [
+    {"statement": item["statement"], "step_usefulness": "High"}
+    for item in legacy_state["current_knowledge"]
+]
+legacy_state["proof_steps"][0]["informal_candidates"][0]["step_usefulness"] = "High"
+with open(legacy_state_path, "w") as f:
+    json.dump(legacy_state, f)
+
 resumed = resume_problem(
     translator_root,
     reasoning_offline=[R("Finish the theorem.", "Compute both sides.", final=True)],
@@ -123,6 +145,8 @@ checks.extend([
     ("runtime is cumulative", resumed.stats.runtime_seconds >= failed_runtime),
     ("resume log is appended", "Resume started: resume_translator" in open(
         os.path.join(translator_root, "log.txt")).read()),
+    ("resaved state drops legacy usefulness metadata",
+     "step_usefulness" not in open(legacy_state_path).read()),
 ])
 
 # Reasoner interruption: with no earlier translator outage, candidate 1 is

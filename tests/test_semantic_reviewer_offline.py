@@ -18,7 +18,6 @@ from midas.parser import parse_semantic_review
 def reason(step: str, proof: str, *, final=False) -> str:
     return (
         f"NEXT STEP:\n{step}\n\nPROOF:\n{proof}\n\n"
-        "STEP USEFULNESS:\nHigh\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}\n\n"
         "IDEAS FOR THE FUTURE:\n" +
         ("None — the theorem is complete" if final else "[High] Finish next.")

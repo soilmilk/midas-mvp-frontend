@@ -53,11 +53,10 @@ def T(decls, body, final=False):
             f"NEW DECLARATIONS:\n```lean4\n{decls}\n```\n\n"
             f"{heading}:\n\n```\n{body}\n```\n")
 
-def R(next_step, proof, final=False, idea="[High] Continue the proof.", usefulness="High"):
+def R(next_step, proof, final=False, idea="[High] Continue the proof."):
     return (
         f"NEXT STEP:\n{next_step}\n\n"
         f"PROOF:\n{proof}\n\n"
-        f"STEP USEFULNESS:\n{usefulness}\n\n"
         f"IS_FINAL_STEP: {'True' if final else 'False'}\n\n"
         f"IDEAS FOR THE FUTURE:\n{idea}"
     )
@@ -72,7 +71,7 @@ reasoning = [
     R("Show both of these facts:\nA = 5 and B = 5.", "Evaluate both expressions.",
       idea="[Low] Failed candidate roadmap must not persist."),
     R("Show A = 5.", "A is 2+3 which evaluates to 5.",
-      idea="[High] Prove B = 5 next.", usefulness="Low"),
+      idea="[High] Prove B = 5 next."),
     R("Assume B = 5 locally.", "Insert the claim as a local fact.",
       idea="[Low] A cheating roadmap must not persist."),
     R("Show B = 5 in one large automation call.",
@@ -193,10 +192,6 @@ Second line of the proposition.
 
 PROOF:
 The proof.
-
-STEP USEFULNESS:
-Medium
-This proposition may support the proof.
 
 IS_FINAL_STEP: False
 
@@ -321,8 +316,9 @@ step1_translator_prompt = open(os.path.join(
 )).read()
 checks.append(("accepted roadmap appears in the next prompt",
                "[High] Prove B = 5 next." in step2_prompt))
-checks.append(("accepted usefulness appears with proved progress",
-               "Step 1 (usefulness: Low):\nShow A = 5." in step2_prompt))
+checks.append(("accepted progress appears without usefulness",
+               "Step 1:\nShow A = 5." in step2_prompt and
+               "usefulness:" not in step2_prompt))
 rejected_attempt_dir = os.path.join(
     root, "artifacts", "proof_steps", "proof_step_002",
     "informal_candidate_002", "lean4_attempt_002",
@@ -372,21 +368,19 @@ checks.append(("nested sorry candidate fails before compilation",
 checks.append(("new accepted roadmap replaces the older roadmap",
                "[High] Combine both equalities." in step3_prompt and
                "[High] Prove B = 5 next." not in step3_prompt))
-checks.append(("proved progress remains chronological and annotated",
-               step3_prompt.index("Step 1 (usefulness: Low):\nShow A = 5.") <
-               step3_prompt.index("Step 2 (usefulness: High):\nShow B = 5.")))
+checks.append(("proved progress remains chronological",
+               step3_prompt.index("Step 1:\nShow A = 5.") <
+               step3_prompt.index("Step 2:\nShow B = 5.")))
 checks.append(("translator excludes planning metadata",
                "STEP USEFULNESS" not in step1_translator_prompt and
                "IDEAS FOR THE FUTURE" not in step1_translator_prompt))
-checks.append(("state stores candidate metadata and final roadmap",
-               st.proof_steps[0].informal_candidates[2].step_usefulness == "Low" and
+checks.append(("state stores candidate roadmap and final roadmap",
                st.proof_steps[0].informal_candidates[2].future_ideas ==
                "[High] Prove B = 5 next." and
                st.future_ideas == "None — the theorem is complete"))
-checks.append(("state stores accepted statements with usefulness",
-               [(item.statement, item.step_usefulness)
-                for item in st.current_knowledge] ==
-               [("Show A = 5.", "Low"), ("Show B = 5.", "High")]))
+checks.append(("state stores accepted statements",
+               [item.statement for item in st.current_knowledge] ==
+               ["Show A = 5.", "Show B = 5."]))
 checks.append(("state stores translator rejection metadata",
                st.proof_steps[1].informal_candidates[1]
                .lean_translation_attempts[1].translator_rejection_kind ==

@@ -120,8 +120,7 @@ class ReasoningAgent:
         if problem_mode not in ("easy", "hard"):
             raise ValueError(f"unsupported problem mode: {problem_mode!r}")
         proved_steps = "\n\n".join(
-            f"Step {index} (usefulness: {item.step_usefulness or 'Unrated'}):\n"
-            f"{item.statement}"
+            f"Step {index}:\n{item.statement}"
             for index, item in enumerate(informal_progress, start=1)
         ) or "(none yet)"
         parts = [
@@ -134,11 +133,9 @@ class ReasoningAgent:
             (
                 "\n## Previously proved steps\n\n"
                 + proved_steps
-                + "\n\nEvery listed step has been formally verified. Usefulness is an "
-                "estimate of how likely the step was to belong to a viable complete "
-                "solution when it was proposed, not a measure of truth. Prioritize "
-                "relevant steps, but you may ignore Low-usefulness steps and reassess "
-                "any rating when the proof direction changes."
+                + "\n\nEvery listed step has been formally verified. Reassess which "
+                "steps are relevant as the proof direction changes; you do not need "
+                "to use every proved fact."
             ),
             (
                 "\n## Ideas for the future (planning context; not yet proved)\n"
@@ -159,13 +156,11 @@ class ReasoningAgent:
                 "\n## Required action format\n\n"
                 "Return exactly one action using these fields in this order:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<assess current progress and the general direction, whether that direction is promising, and how the proposed step advances it. Notice irrelevant or redundant prior steps. At most 1000 words.>\n\n"
+                "<assess current progress and the general direction, whether that direction is promising, and how the proposed step advances it. Notice irrelevant or redundant prior steps.>\n\n"
                 "NEXT STEP:\n"
                 "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
                 "<a non-empty English detailed proof of that step>\n\n"
-                "STEP USEFULNESS:\n"
-                "<High, Medium, or Low on its own line>\n\n"
                 "IS_FINAL_STEP: True | False\n\n"
                 "IDEAS FOR THE FUTURE:\n"
                 "<a non-empty rolling roadmap of likely later moves, preferably with [High], [Medium], or [Low] confidence on each idea; use `None — the theorem is complete` for a final step>\n\n"
@@ -177,25 +172,21 @@ class ReasoningAgent:
                 "\n## Required action format\n\n"
                 "For a non-final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<assess current progress and the general direction, whether that direction is promising, and how the proposed step advances it. Notice irrelevant or redundant prior steps. At most 1000 words.>\n\n"
+                "<assess current progress and test or assert the general direction, whether that direction is promising, and elaborate on the next steps that would contribute on the completion of this problem. Notice irrelevant or redundant prior steps.>\n\n"
                 "NEXT STEP:\n"
                 "<A statement of the next step, along with a small reason why it's true (summarized proof)>\n\n"
                 "PROOF:\n"
                 "<a non-empty English detailed proof of that step>\n\n"
-                "STEP USEFULNESS:\n"
-                "<High, Medium, or Low on its own line>\n\n"
                 "IS_FINAL_STEP: False\n\n"
                 "IDEAS FOR THE FUTURE:\n"
                 "<a non-empty rolling roadmap of likely later moves, preferably with [High], [Medium], or [Low] confidence on each idea>\n\n"
                 "For a final action, return exactly:\n\n"
                 "INTERMEDIATE REASONING:\n"
-                "<English reasoning. At most 1000 words.>\n\n"
+                "<English reasoning.>\n\n"
                 "NEXT STEP:\n"
                 "<one non-empty English proof step>\n\n"
                 "PROOF:\n"
                 "<a non-empty English proof of that step>\n\n"
-                "STEP USEFULNESS:\n"
-                "<High, Medium, or Low on its own line>\n\n"
                 "IS_FINAL_STEP: True\n\n"
                 "ANSWER:\n"
                 "<the concrete mathematical answer in English or mathematical notation>\n\n"
@@ -294,7 +285,7 @@ class TranslationAgent:
         schema = (
             "INTERMEDIATE REASONING:\n"
             "<intermediate reasoning - assess the current Lean 4 file and next English "
-            "step and proof, and reason about how to translate to Lean 4. At most 1000 words.>\n\n"
+            "step and proof, and reason about how to translate to Lean 4.>\n\n"
             "PLAN:\n"
             "<state which lemmas or definitions you will propose, how you will prove "
                 "them, and how you will change the theorem body>\n\n"

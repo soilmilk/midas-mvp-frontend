@@ -144,15 +144,13 @@ class InformalCandidate(BaseModel):
     reasoning_prompt_path: Optional[str] = None
     informal_step_path: Optional[str] = None
     reasoning_call_error_path: Optional[str] = None
-    step_usefulness: Optional[Literal["High", "Medium", "Low"]] = None
     future_ideas: str = ""
     lean_translation_attempts: List[LeanTranslationAttempt] = Field(default_factory=list)
 
 
 class AcceptedKnowledge(BaseModel):
-    """One Lean-verified English step and its relevance estimate when proposed."""
+    """One Lean-verified English step."""
     statement: str
-    step_usefulness: Optional[Literal["High", "Medium", "Low"]] = None
 
 
 class ProofStep(BaseModel):
@@ -229,7 +227,7 @@ class ProofRunState(BaseModel):
         if isinstance(data, dict) and isinstance(data.get("current_knowledge"), list):
             data = dict(data)
             data["current_knowledge"] = [
-                {"statement": item, "step_usefulness": None}
+                {"statement": item}
                 if isinstance(item, str) else item
                 for item in data["current_knowledge"]
             ]

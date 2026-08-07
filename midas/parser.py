@@ -41,7 +41,6 @@ class ReasoningAction:
     informal_step: str = ""
     next_step: str = ""
     proof: str = ""
-    step_usefulness: str = ""
     future_ideas: str = ""
     is_final_step: Optional[bool] = None
     answer: Optional[str] = None
@@ -89,7 +88,12 @@ def _parse_translator_preamble(raw: str, expected: list[str]) -> str:
     return ""
 
 
-def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
+def parse_reasoning_action(
+    raw: str,
+    problem_mode: str,
+    *,
+    allow_legacy_step_usefulness: bool = False,
+) -> ReasoningAction:
     """Parse one strict English-space action without treating malformed flags as false."""
     if problem_mode not in ("easy", "hard"):
         return _action_error(f"unsupported problem mode: {problem_mode!r}")
@@ -103,24 +107,27 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
         if len(found) != 1:
             return _action_error(f"duplicate {name} field")
 
-    required = [
-        "NEXT STEP", "PROOF", "STEP USEFULNESS", "IS_FINAL_STEP",
-        "IDEAS FOR THE FUTURE",
-    ]
+    required = ["NEXT STEP", "PROOF", "IS_FINAL_STEP", "IDEAS FOR THE FUTURE"]
     for name in required:
         if name not in by_name:
             return _action_error(f"missing {name} field")
 
     ordered_names = [match.group(1) for match in matches]
-    expected = ["NEXT STEP", "PROOF", "STEP USEFULNESS", "IS_FINAL_STEP"]
+    has_legacy_usefulness = "STEP USEFULNESS" in by_name
+    if has_legacy_usefulness and not allow_legacy_step_usefulness:
+        return _action_error("STEP USEFULNESS is no longer supported")
+
+    expected = ["NEXT STEP", "PROOF"]
+    if has_legacy_usefulness:
+        expected.append("STEP USEFULNESS")
+    expected.append("IS_FINAL_STEP")
     if "ANSWER" in by_name:
         expected.append("ANSWER")
     expected.append("IDEAS FOR THE FUTURE")
     if ordered_names != expected:
         return _action_error(
-            "action fields must appear in order: NEXT STEP, PROOF, STEP "
-            "USEFULNESS, IS_FINAL_STEP, ANSWER when permitted, then IDEAS "
-            "FOR THE FUTURE"
+            "action fields must appear in order: NEXT STEP, PROOF, IS_FINAL_STEP, "
+            "ANSWER when permitted, then IDEAS FOR THE FUTURE"
         )
 
     values = {}
@@ -134,10 +141,6 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
         return _action_error("NEXT STEP must be non-empty")
     if not values["PROOF"]:
         return _action_error("PROOF must be non-empty")
-    usefulness_lines = values["STEP USEFULNESS"].splitlines()
-    usefulness = usefulness_lines[0].strip() if usefulness_lines else ""
-    if usefulness not in ("High", "Medium", "Low"):
-        return _action_error("STEP USEFULNESS must start with exactly High, Medium, or Low")
     if not values["IDEAS FOR THE FUTURE"]:
         return _action_error("IDEAS FOR THE FUTURE must be non-empty")
     flag = values["IS_FINAL_STEP"]
@@ -161,7 +164,6 @@ def parse_reasoning_action(raw: str, problem_mode: str) -> ReasoningAction:
         ),
         next_step=values["NEXT STEP"],
         proof=values["PROOF"],
-        step_usefulness=usefulness,
         future_ideas=values["IDEAS FOR THE FUTURE"],
         is_final_step=is_final,
         answer=answer,

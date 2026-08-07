@@ -233,19 +233,11 @@ or malformed response is retried up to `max_reviewer_call_attempts`, then fails 
 
 ### Hard Mode protocol and transaction
 
-Every new reasoner action includes non-empty `NEXT STEP`, `PROOF`, `STEP USEFULNESS`, and
-`IDEAS FOR THE FUTURE` fields plus an exact `IS_FINAL_STEP: True` or
-`IS_FINAL_STEP: False`. Usefulness is exactly `High`, `Medium`, or `Low` on its own line. It rates
-how likely the result is to belong to a viable complete solution, not how difficult, novel, or
-large the step is. Future ideas form a rolling, unproved roadmap; only the roadmap from an
-accepted step is passed to the next reasoner call.
-
-Every accepted rating is shown beside its verified `NEXT STEP` in later reasoner prompts. `High`
-means the result is expected to be used directly or required by the current plan, even when it is
-a tiny calculation. `Medium` marks credible but uncertain support. `Low` marks exploratory,
-speculative, redundant, or currently unconnected work. Ratings describe relevance when proposed;
-later reasoners may reassess them and ignore Low-rated facts as the roadmap changes. All listed
-steps remain formally verified regardless of rating.
+Every new reasoner action includes non-empty `NEXT STEP`, `PROOF`, and `IDEAS FOR THE FUTURE`
+fields plus an exact `IS_FINAL_STEP: True` or `IS_FINAL_STEP: False`. Future ideas form a rolling,
+unproved roadmap; only the roadmap from an accepted step is passed to the next reasoner call.
+Previously accepted steps are shown chronologically and remain formally verified, while later
+reasoners may reassess which facts are relevant as the roadmap changes.
 
 - Easy Mode never uses an `ANSWER` field.
 - A non-final Hard Mode action forbids `ANSWER`.
@@ -263,9 +255,6 @@ NEXT STEP:
 
 PROOF:
 ...
-
-STEP USEFULNESS:
-High | Medium | Low
 
 IS_FINAL_STEP: True | False
 
