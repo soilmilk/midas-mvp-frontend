@@ -1,7 +1,7 @@
-theorem liu_bang_xiang_yu_hard
+theorem imo_2026_p3
     (n : ℕ)
     (h_n_positive : 0 < n) :
     IsGreatest
       {c : ℝ | LiuCanGuarantee n c}
-      (liu_bang_xiang_yu_solution n) := by
+      (imo_2026_p3_solution n) := by
   sorry

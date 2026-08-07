@@ -7,7 +7,6 @@
   "max_runtime_seconds": 14400,
   "lean_prelude": [
     "import Mathlib",
-    "import Aesop",
     "set_option maxHeartbeats 0",
     "open BigOperators Real Nat Topology Rat"
   ],

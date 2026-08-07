@@ -1,19 +1,7 @@
-The following problem statement is written in tex:
+Let $\mathbb{R}_{>0}$ be the set of all positive real numbers. 
 
-Determine all functions
+Determine all functions $f : \mathbb{R}_{>0} \rightarrow \mathbb{R}_{>0}$ such that
 
-\[
-f : \mathbb{R} \to \mathbb{R}
-\]
+\[\sqrt{\frac{x^2 + f(y)^2}{2}} \geq \frac{f(x)+y}{2} \geq \sqrt{xf(y)}\]
 
-such that \(f(x) > 0\) for every positive real number \(x\), and such that, for all positive real numbers \(x\) and \(y\),
-
-\[
-\sqrt{\frac{x^2 + f(y)^2}{2}}
-\geq
-\frac{f(x) + y}{2}
-\geq
-\sqrt{x f(y)}.
-\]
-
-In another word, you need to determine the collection of functions that satisfies the assumptions above, and show that a function satisfies the assumpetions if and only if it is in the collection.
+for every $x,y \in \mathbb{R}_{>0}$.

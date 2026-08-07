@@ -3,14 +3,15 @@ The core MVP loop — SPEC.md §18, wiring §21's modules. LimitController (§2/
 FailureController (§16) live here. Entry point: run_problem().
 """
 from __future__ import annotations
-import json, os, re, shutil, time
+import hashlib, json, os, re, shutil, tempfile, time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from .models import (AcceptedKnowledge, ProofRunState, ProofStep, InformalCandidate, LeanTranslationAttempt,
                      SemanticReviewAttempt, SemanticReviewReport,
-                     RunStats, LLMUsageStats, CheckReport, CompileJson, Diagnostic,
+                     RunStats, LLMUsageStats, LLMUsageBreakdown,
+                     CheckReport, CompileJson, Diagnostic,
                      Config, attempt_kind_for)
 from .problem import load_problem, InputValidator, Problem
 from .agents import (LLMResult, OfflineResponse, ReasoningAgent, TranslationAgent,
@@ -24,7 +25,8 @@ from .structure import (check_filled_placeholder, check_structure,
                         exploration_sorry_violations)
 from .verifier_client import make_verifier, build_compile_json
 from .reconstructor import RenderedSource, SourceRegion, render_source
-from .artifacts import Paths, LeanArtifactLogger, RunEventLogger, StateManager
+from .artifacts import (Paths, LeanArtifactLogger, RunDirectoryExistsError,
+                        RunEventLogger, StateManager)
 
 CONSID = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "considerations")
 
@@ -320,9 +322,13 @@ class _ResumeCursor:
     step: int
     candidate: int
     attempt: Optional[int]
-    kind: str                         # reasoner | translator | reviewer
+    kind: str  # reasoner | translator | reviewer | next_candidate | next_step
+    reviewer_attempt: Optional[int] = None
     saved_prompt: str = ""
     archive_root: str = ""
+    custom_branch: bool = False
+    reasoning_feedback: str = ""
+    failed_next_step: str = ""
 
 
 def _load_saved_problem(root: str, state: ProofRunState) -> Problem:
@@ -351,9 +357,154 @@ def _load_saved_problem(root: str, state: ProofRunState) -> Problem:
     )
 
 
+def _saved_config(root: str) -> Config:
+    return Config(**json.load(open(os.path.join(root, "config.json"))))
+
+
+def _runtime_candidate_feedback(
+    candidate: InformalCandidate, problem_mode: str
+) -> tuple[str, str]:
+    """Recover enough context to move from an exhausted candidate to the next one."""
+    failed_next_step = ""
+    if candidate.informal_step_path and os.path.isfile(candidate.informal_step_path):
+        saved_action = open(candidate.informal_step_path).read()
+        action = parse_reasoning_action(
+            saved_action,
+            problem_mode,
+            allow_legacy_step_usefulness=True,
+        )
+        if action.ok:
+            failed_next_step = action.next_step
+    feedback = (
+        "The previous step could not be verified due to being too complex or incorrect. "
+        "Propose a smaller, more direct, or differently formulated step that is "
+        "translatable to Lean 4. Do not repeat it unchanged."
+    )
+    return feedback, failed_next_step
+
+
+def _find_runtime_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
+    """Continue from the first unstarted unit after a clean runtime cutoff."""
+    config = _saved_config(root)
+    if state.stats.total_lean_attempts >= config.max_total_lean_attempts:
+        raise ValueError(
+            "runtime-expired run has no remaining translation work under "
+            "max_total_lean_attempts"
+        )
+    terminal = next(
+        (step for step in reversed(state.proof_steps)
+         if step.status not in ("accepted", "final_success")),
+        None,
+    )
+    if terminal is None:
+        next_step = len(state.proof_steps) + 1
+        if next_step > config.max_proof_steps:
+            raise ValueError(
+                "runtime-expired run has no remaining proof step under max_proof_steps"
+            )
+        return _ResumeCursor(next_step, 1, None, "next_step")
+
+    active = next(
+        (candidate for candidate in reversed(terminal.informal_candidates)
+         if candidate.status == "pending"),
+        None,
+    )
+    if active is not None:
+        # A reviewer transaction may have been persisted immediately before the
+        # deadline check, or marked call_failed without ever making the call.
+        if active.lean_translation_attempts:
+            latest = active.lean_translation_attempts[-1]
+            for review in reversed(latest.semantic_review_attempts):
+                if review.status in ("pending", "call_failed"):
+                    prompt = ""
+                    if review.prompt_path and os.path.isfile(review.prompt_path):
+                        prompt = open(review.prompt_path).read()
+                    return _ResumeCursor(
+                        terminal.proof_step_index,
+                        active.informal_candidate_index,
+                        latest.lean_translation_attempt_index,
+                        "reviewer",
+                        reviewer_attempt=review.semantic_review_attempt_index,
+                        saved_prompt=prompt,
+                    )
+
+        if active.lean_translation_attempts:
+            latest = active.lean_translation_attempts[-1]
+            if latest.status in ("pending", "translation_call_failed"):
+                prompt = ""
+                if latest.translator_prompt_path and os.path.isfile(
+                    latest.translator_prompt_path
+                ):
+                    prompt = open(latest.translator_prompt_path).read()
+                return _ResumeCursor(
+                    terminal.proof_step_index,
+                    active.informal_candidate_index,
+                    latest.lean_translation_attempt_index,
+                    "translator",
+                    saved_prompt=prompt,
+                )
+
+        has_action = bool(
+            active.informal_step_path
+            and os.path.isfile(active.informal_step_path)
+            and os.path.getsize(active.informal_step_path) > 0
+        )
+        if not has_action:
+            return _ResumeCursor(
+                terminal.proof_step_index,
+                active.informal_candidate_index,
+                None,
+                "reasoner",
+            )
+
+        next_attempt = (
+            max(
+                (attempt.lean_translation_attempt_index
+                 for attempt in active.lean_translation_attempts),
+                default=0,
+            ) + 1
+        )
+        if next_attempt <= config.max_lean_translation_attempts_per_candidate:
+            return _ResumeCursor(
+                terminal.proof_step_index,
+                active.informal_candidate_index,
+                next_attempt,
+                "translator",
+            )
+
+    next_candidate = max(
+        (candidate.informal_candidate_index
+         for candidate in terminal.informal_candidates),
+        default=0,
+    ) + 1
+    if next_candidate <= config.max_informal_candidates_per_proof_step:
+        feedback = ""
+        failed_next_step = ""
+        if terminal.informal_candidates:
+            feedback, failed_next_step = _runtime_candidate_feedback(
+                terminal.informal_candidates[-1], state.problem_mode
+            )
+        return _ResumeCursor(
+            terminal.proof_step_index,
+            next_candidate,
+            None,
+            "next_candidate",
+            reasoning_feedback=feedback,
+            failed_next_step=failed_next_step,
+        )
+
+    raise ValueError(
+        "runtime-expired terminal proof step has no remaining candidate or "
+        "translation attempt under the saved config limits"
+    )
+
+
 def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
     if state.status == "final_success":
         raise ValueError("cannot resume a successful run")
+    if state.failure_reason == "max_runtime_seconds":
+        return _find_runtime_resume_cursor(root, state)
+
     terminal = next(
         (step for step in reversed(state.proof_steps)
          if step.status not in ("accepted", "final_success")),
@@ -391,6 +542,7 @@ def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
                     candidate.informal_candidate_index,
                     attempt.lean_translation_attempt_index,
                     "reviewer",
+                    reviewer_attempt=pending_review.semantic_review_attempt_index,
                     saved_prompt=prompt,
                 )
             if attempt.status in ("translation_call_failed", "pending"):
@@ -409,6 +561,79 @@ def _find_resume_cursor(root: str, state: ProofRunState) -> _ResumeCursor:
     raise ValueError(
         "terminal proof step contains no interrupted reasoner, translator, or reviewer call"
     )
+
+
+def _custom_resume_cursor(
+    root: str,
+    state: ProofRunState,
+    *,
+    step: int,
+    candidate: int,
+    stage: Literal["reasoner", "translator", "reviewer"],
+    attempt: Optional[int],
+    reviewer_attempt: Optional[int],
+) -> _ResumeCursor:
+    """Resolve and validate an exact, already-recorded pipeline checkpoint."""
+    if stage not in ("reasoner", "translator", "reviewer"):
+        raise ValueError(f"unsupported custom resume stage: {stage!r}")
+    if stage == "reasoner" and (attempt is not None or reviewer_attempt is not None):
+        raise ValueError("reasoner stage forbids attempt selectors")
+    if stage == "translator" and (attempt is None or reviewer_attempt is not None):
+        raise ValueError("translator stage requires attempt and forbids reviewer_attempt")
+    if stage == "reviewer" and (attempt is None or reviewer_attempt is None):
+        raise ValueError("reviewer stage requires attempt and reviewer_attempt")
+
+    selected_step = next(
+        (item for item in state.proof_steps if item.proof_step_index == step), None
+    )
+    if selected_step is None:
+        raise ValueError(f"proof step {step} does not exist")
+    selected_candidate = next(
+        (item for item in selected_step.informal_candidates
+         if item.informal_candidate_index == candidate),
+        None,
+    )
+    if selected_candidate is None:
+        raise ValueError(f"candidate {candidate} does not exist in proof step {step}")
+
+    cursor = _ResumeCursor(step, candidate, attempt, stage, custom_branch=True)
+    if stage == "reasoner":
+        return cursor
+    if (not selected_candidate.informal_step_path
+            or not os.path.isfile(selected_candidate.informal_step_path)):
+        raise ValueError("selected translator/reviewer checkpoint lacks an informal action")
+    selected_attempt = next(
+        (item for item in selected_candidate.lean_translation_attempts
+         if item.lean_translation_attempt_index == attempt),
+        None,
+    )
+    if selected_attempt is None:
+        raise ValueError(
+            f"Lean attempt {attempt} does not exist in proof step {step}, candidate {candidate}"
+        )
+    if stage == "translator":
+        if (selected_attempt.translator_prompt_path
+                and os.path.isfile(selected_attempt.translator_prompt_path)):
+            cursor.saved_prompt = open(selected_attempt.translator_prompt_path).read()
+        return cursor
+
+    selected_review = next(
+        (item for item in selected_attempt.semantic_review_attempts
+         if item.semantic_review_attempt_index == reviewer_attempt),
+        None,
+    )
+    if selected_review is None:
+        raise ValueError(
+            f"reviewer attempt {reviewer_attempt} does not exist in proof step {step}, "
+            f"candidate {candidate}, Lean attempt {attempt}"
+        )
+    if (not selected_attempt.raw_translator_output_path
+            or not os.path.isfile(selected_attempt.raw_translator_output_path)):
+        raise ValueError("selected reviewer checkpoint lacks translator output")
+    cursor.reviewer_attempt = reviewer_attempt
+    if selected_review.prompt_path and os.path.isfile(selected_review.prompt_path):
+        cursor.saved_prompt = open(selected_review.prompt_path).read()
+    return cursor
 
 
 def _validate_resume_prefix(paths: Paths, state: ProofRunState,
@@ -456,65 +681,143 @@ def _archive_and_rewind(paths: Paths, state: ProofRunState,
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.move(path, destination)
 
-    step_pos = next(
-        n for n, step in enumerate(state.proof_steps)
-        if step.proof_step_index == cursor.step
-    )
-    step = state.proof_steps[step_pos]
-    candidate_pos = next(
-        n for n, candidate in enumerate(step.informal_candidates)
-        if candidate.informal_candidate_index == cursor.candidate
-    )
-
-    if cursor.kind == "translator":
-        candidate = step.informal_candidates[candidate_pos]
-        assert cursor.attempt is not None
-        for attempt in candidate.lean_translation_attempts:
-            if attempt.lean_translation_attempt_index >= cursor.attempt:
-                archive(paths.la(cursor.step, cursor.candidate,
-                                 attempt.lean_translation_attempt_index))
-        candidate.lean_translation_attempts = [
-            attempt for attempt in candidate.lean_translation_attempts
-            if attempt.lean_translation_attempt_index < cursor.attempt
-        ]
-        candidate.status = "pending"
-        candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
-        step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
-    elif cursor.kind == "reviewer":
-        candidate = step.informal_candidates[candidate_pos]
-        assert cursor.attempt is not None
-        selected = next(
-            attempt for attempt in candidate.lean_translation_attempts
-            if attempt.lean_translation_attempt_index == cursor.attempt
-        )
-        archive(os.path.join(
-            paths.la(cursor.step, cursor.candidate, cursor.attempt),
-            "semantic_reviews",
-        ))
-        selected.semantic_review_attempts = []
-        for attempt in candidate.lean_translation_attempts:
-            if attempt.lean_translation_attempt_index > cursor.attempt:
-                archive(paths.la(cursor.step, cursor.candidate,
-                                 attempt.lean_translation_attempt_index))
-        candidate.lean_translation_attempts = [
-            attempt for attempt in candidate.lean_translation_attempts
-            if attempt.lean_translation_attempt_index <= cursor.attempt
-        ]
-        candidate.status = "pending"
-        candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
-        step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
+    if cursor.kind == "next_step":
+        accepted_prefix = list(state.proof_steps)
     else:
-        candidates_to_archive = step.informal_candidates[candidate_pos:]
-        step.informal_candidates = step.informal_candidates[:candidate_pos]
+        step_pos = next(
+            n for n, step in enumerate(state.proof_steps)
+            if step.proof_step_index == cursor.step
+        )
+        step = state.proof_steps[step_pos]
 
-    for candidate in candidates_to_archive:
-        archive(paths.ic(cursor.step, candidate.informal_candidate_index))
+        if cursor.kind == "next_candidate":
+            candidates_to_archive = [
+                candidate for candidate in step.informal_candidates
+                if candidate.informal_candidate_index >= cursor.candidate
+            ]
+            step.informal_candidates = [
+                candidate for candidate in step.informal_candidates
+                if candidate.informal_candidate_index < cursor.candidate
+            ]
+        else:
+            candidate_pos = next(
+                n for n, candidate in enumerate(step.informal_candidates)
+                if candidate.informal_candidate_index == cursor.candidate
+            )
+            if cursor.kind == "translator":
+                candidate = step.informal_candidates[candidate_pos]
+                assert cursor.attempt is not None
+                for attempt in candidate.lean_translation_attempts:
+                    if attempt.lean_translation_attempt_index >= cursor.attempt:
+                        archive(paths.la(cursor.step, cursor.candidate,
+                                         attempt.lean_translation_attempt_index))
+                candidate.lean_translation_attempts = [
+                    attempt for attempt in candidate.lean_translation_attempts
+                    if attempt.lean_translation_attempt_index < cursor.attempt
+                ]
+                candidate.status = "pending"
+                candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
+                step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
+            elif cursor.kind == "reviewer":
+                candidate = step.informal_candidates[candidate_pos]
+                assert cursor.attempt is not None
+                assert cursor.reviewer_attempt is not None
+                selected = next(
+                    attempt for attempt in candidate.lean_translation_attempts
+                    if attempt.lean_translation_attempt_index == cursor.attempt
+                )
+                for review in selected.semantic_review_attempts:
+                    if review.semantic_review_attempt_index >= cursor.reviewer_attempt:
+                        archive(paths.review(
+                            cursor.step, cursor.candidate, cursor.attempt,
+                            review.semantic_review_attempt_index,
+                        ))
+                selected.semantic_review_attempts = [
+                    review for review in selected.semantic_review_attempts
+                    if review.semantic_review_attempt_index < cursor.reviewer_attempt
+                ]
+                for attempt in candidate.lean_translation_attempts:
+                    if attempt.lean_translation_attempt_index > cursor.attempt:
+                        archive(paths.la(cursor.step, cursor.candidate,
+                                         attempt.lean_translation_attempt_index))
+                candidate.lean_translation_attempts = [
+                    attempt for attempt in candidate.lean_translation_attempts
+                    if attempt.lean_translation_attempt_index <= cursor.attempt
+                ]
+                candidate.status = "pending"
+                selected.status = "pending"
+                candidates_to_archive = step.informal_candidates[candidate_pos + 1:]
+                step.informal_candidates = step.informal_candidates[:candidate_pos + 1]
+            else:
+                candidates_to_archive = step.informal_candidates[candidate_pos:]
+                step.informal_candidates = step.informal_candidates[:candidate_pos]
 
-    for later_step in state.proof_steps[step_pos + 1:]:
-        archive(paths.ps(later_step.proof_step_index))
-        archive(paths.accepted_ps(later_step.proof_step_index))
-    state.proof_steps = state.proof_steps[:step_pos + 1]
-    step.status = "pending"
+        for candidate in candidates_to_archive:
+            archive(paths.ic(cursor.step, candidate.informal_candidate_index))
+
+        archive(paths.accepted_ps(cursor.step))
+        for later_step in state.proof_steps[step_pos + 1:]:
+            archive(paths.ps(later_step.proof_step_index))
+            archive(paths.accepted_ps(later_step.proof_step_index))
+        state.proof_steps = state.proof_steps[:step_pos + 1]
+        step.status = "pending"
+        accepted_prefix = state.proof_steps[:step_pos]
+
+    state.current_knowledge = state.current_knowledge[:len(accepted_prefix)]
+    state.future_ideas = ""
+    if accepted_prefix:
+        accepted_candidates = [
+            candidate
+            for candidate in accepted_prefix[-1].informal_candidates
+            if candidate.status == "accepted"
+        ]
+        if len(accepted_candidates) == 1:
+            state.future_ideas = accepted_candidates[0].future_ideas
+
+    if cursor.custom_branch:
+        reasoner_calls = sum(
+            1
+            for proof_step in state.proof_steps
+            for candidate in proof_step.informal_candidates
+            if candidate.reasoning_call_error_path
+            or (candidate.informal_step_path
+                and os.path.isfile(candidate.informal_step_path))
+        )
+        translator_calls = sum(
+            1
+            for proof_step in state.proof_steps
+            for candidate in proof_step.informal_candidates
+            for attempt in candidate.lean_translation_attempts
+            if attempt.status != "pending"
+            or (attempt.raw_translator_output_path
+                and os.path.isfile(attempt.raw_translator_output_path))
+        )
+        reviewer_calls = sum(
+            1
+            for proof_step in state.proof_steps
+            for candidate in proof_step.informal_candidates
+            for attempt in candidate.lean_translation_attempts
+            for review in attempt.semantic_review_attempts
+            if review.call_error_path
+            or (review.raw_output_path and os.path.isfile(review.raw_output_path))
+        )
+        state.stats = RunStats(
+            accepted_proof_steps=len(accepted_prefix),
+            total_lean_attempts=translator_calls,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            total_llm_calls=reasoner_calls + translator_calls + reviewer_calls,
+            llm_usage=LLMUsageBreakdown(
+                total=LLMUsageStats(
+                    calls=reasoner_calls + translator_calls + reviewer_calls
+                ),
+                reasoner=LLMUsageStats(calls=reasoner_calls),
+                translator=LLMUsageStats(calls=translator_calls),
+                reviewer=LLMUsageStats(calls=reviewer_calls),
+            ),
+        )
+        if state.problem_mode == "hard":
+            state.placeholder_status = "unresolved"
+            state.placeholder_final_source = None
 
     archive(paths.failure)
     archive(paths.final)
@@ -528,8 +831,15 @@ def _archive_and_rewind(paths: Paths, state: ProofRunState,
             "candidate": cursor.candidate,
             "attempt": cursor.attempt,
             "kind": cursor.kind,
+            "reviewer_attempt": cursor.reviewer_attempt,
         }, f, indent=2)
         f.write("\n")
+    if cursor.custom_branch:
+        shutil.rmtree(archive_root)
+        archive_parent = os.path.dirname(archive_root)
+        if os.path.isdir(archive_parent) and not os.listdir(archive_parent):
+            os.rmdir(archive_parent)
+        cursor.archive_root = "(discarded suffix remains available in the source run)"
     return cursor
 
 
@@ -634,21 +944,27 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                 reasoning_offline: Optional[List[OfflineResponse]] = None,
                 translation_offline: Optional[List[OfflineResponse]] = None,
                 reviewer_offline: Optional[List[OfflineResponse]] = None,
-                *, _resume_root: Optional[str] = None) -> ProofRunState:
+                *, _resume_root: Optional[str] = None,
+                _resume_cursor: Optional[_ResumeCursor] = None) -> ProofRunState:
     resume_cursor = None
     if _resume_root is not None:
         resume_root = os.path.abspath(_resume_root)
         paths = Paths(os.path.dirname(resume_root), os.path.basename(resume_root))
         statemgr = StateManager(paths)
         state = statemgr.load(paths.root)
-        resume_cursor = _find_resume_cursor(paths.root, state)
+        resume_cursor = _resume_cursor or _find_resume_cursor(paths.root, state)
         _validate_resume_prefix(paths, state, resume_cursor)
         prob = _load_saved_problem(paths.root, state)
         problem_dir = paths.root
         problem_id = state.problem_id
         events = RunEventLogger(paths, resume=True)
         events.event("-" * 72, elapsed_ms=0)
-        events.event(f"Resume started: {problem_id}", console=True, elapsed_ms=0)
+        events.event(
+            f"{'Custom resume branch' if resume_cursor.custom_branch else 'Resume'} "
+            f"started: {problem_id}",
+            console=True,
+            elapsed_ms=0,
+        )
     else:
         problem_dir = os.path.abspath(problem_dir)
         problem_id = os.path.basename(problem_dir.rstrip("/"))
@@ -701,15 +1017,31 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     if resume_cursor is not None:
         resume_cursor = _archive_and_rewind(paths, state, resume_cursor)
         logger = LeanArtifactLogger(paths)
+        if resume_cursor.kind == "next_step":
+            checkpoint = f"proof_step_{resume_cursor.step:03d}/new_proof_step"
+        elif resume_cursor.kind == "next_candidate":
+            checkpoint = (
+                f"proof_step_{resume_cursor.step:03d}/"
+                f"informal_candidate_{resume_cursor.candidate:03d}/new_reasoner_call"
+            )
+        else:
+            checkpoint = (
+                f"proof_step_{resume_cursor.step:03d}/"
+                f"informal_candidate_{resume_cursor.candidate:03d}/"
+                + (f"lean4_attempt_{resume_cursor.attempt:03d}"
+                   if resume_cursor.attempt is not None else "reasoner_call")
+            )
         events.event(
-            f"Resume checkpoint: proof_step_{resume_cursor.step:03d}/"
-            f"informal_candidate_{resume_cursor.candidate:03d}/"
-            + (f"lean4_attempt_{resume_cursor.attempt:03d}"
-               if resume_cursor.attempt is not None else "reasoner_call"),
+            f"{'Custom resume' if resume_cursor.custom_branch else 'Resume'} checkpoint: "
+            + checkpoint,
             indent=1, console=True,
         )
-        events.event(f"Superseded suffix archived at {resume_cursor.archive_root}",
-                     indent=1)
+        events.event(
+            ("Discarded suffix remains available in the source run"
+             if resume_cursor.custom_branch else
+             f"Superseded suffix archived at {resume_cursor.archive_root}"),
+            indent=1,
+        )
     else:
         logger = LeanArtifactLogger(paths)
         state = ProofRunState(
@@ -858,7 +1190,7 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
     def semantic_review(i, j, k, la, action, informal_candidate,
                         attempt_kind, translator_result, parsed,
                         accepted_declarations, current_body,
-                        saved_prompt=""):
+                        saved_prompt="", review_start=1):
         """Review one compiling transaction, retrying only reviewer infrastructure."""
         current_file = render_source(
             prelude, prob.context, accepted_declarations,
@@ -890,7 +1222,9 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         )
         last_status = "reviewer_call_failed"
         last_feedback = "Semantic reviewer call did not return."
-        for review_index in range(1, prob.config.max_reviewer_call_attempts + 1):
+        for review_index in range(
+            review_start, prob.config.max_reviewer_call_attempts + 1
+        ):
             review_state = SemanticReviewAttempt(
                 semantic_review_attempt_index=review_index,
             )
@@ -1022,16 +1356,25 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
         resume_cursor = None
         if active_resume is not None:
             i = active_resume.step
-            ps = state.proof_steps[-1]
-            events.event(f"Proof step {i} resumed", indent=1, console=True)
+            if active_resume.kind == "next_step":
+                ps = ProofStep(proof_step_index=i)
+                state.proof_steps.append(ps)
+                events.event(f"Proof step {i} started", indent=1, console=True)
+            else:
+                ps = state.proof_steps[-1]
+                events.event(f"Proof step {i} resumed", indent=1, console=True)
         else:
             i = len(state.proof_steps) + 1
             ps = ProofStep(proof_step_index=i)
             state.proof_steps.append(ps)
             events.event(f"Proof step {i} started", indent=1, console=True)
         step_accepted = False
-        reasoning_feedback = ""
-        failed_next_step = ""
+        reasoning_feedback = (
+            active_resume.reasoning_feedback if active_resume is not None else ""
+        )
+        failed_next_step = (
+            active_resume.failed_next_step if active_resume is not None else ""
+        )
 
         candidate_start = active_resume.candidate if active_resume is not None else 1
         for j in range(candidate_start,
@@ -1613,6 +1956,8 @@ def run_problem(problem_dir: str, runs_root: Optional[str] = None,
                     t, pr, accepted_decls, latest_body,
                     saved_prompt=(active_resume.saved_prompt
                                   if reviewer_resume_now else ""),
+                    review_start=(active_resume.reviewer_attempt
+                                  if reviewer_resume_now else 1),
                 )
                 if not aligned:
                     status = review_status
@@ -1830,13 +2175,175 @@ def resume_problem(run_root: str,
                    translation_offline: Optional[List[OfflineResponse]] = None,
                    reviewer_offline: Optional[List[OfflineResponse]] = None,
                    ) -> ProofRunState:
-    """Resume the earliest interrupted LLM call in a run's terminal step."""
+    """Resume an interrupted call or continue after a clean runtime cutoff."""
     return run_problem(
         "",
         reasoning_offline=reasoning_offline,
         translation_offline=translation_offline,
         reviewer_offline=reviewer_offline,
         _resume_root=run_root,
+    )
+
+
+def _rebase_run_paths(value, source_root: str, destination_root: str):
+    """Rebase persisted paths in a copied state tree without touching other strings."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                _rebase_one_path(item, source_root, destination_root)
+                if key.endswith("_path") and isinstance(item, str)
+                else _rebase_run_paths(item, source_root, destination_root)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _rebase_run_paths(item, source_root, destination_root) for item in value
+        ]
+    return value
+
+
+def _rebase_one_path(path: str, source_root: str, destination_root: str) -> str:
+    absolute = os.path.abspath(path)
+    try:
+        relative = os.path.relpath(absolute, source_root)
+    except ValueError:
+        return path
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return path
+    return os.path.join(destination_root, relative)
+
+
+def custom_resume_problem(
+    source_root: str,
+    destination_root: str,
+    *,
+    step: int,
+    candidate: int,
+    stage: Literal["reasoner", "translator", "reviewer"],
+    attempt: Optional[int] = None,
+    reviewer_attempt: Optional[int] = None,
+    reasoning_offline: Optional[List[OfflineResponse]] = None,
+    translation_offline: Optional[List[OfflineResponse]] = None,
+    reviewer_offline: Optional[List[OfflineResponse]] = None,
+) -> ProofRunState:
+    """Branch a run at an exact recorded call and continue in a new run folder."""
+    source_root = os.path.abspath(source_root)
+    destination_root = os.path.abspath(destination_root)
+    if not os.path.isfile(os.path.join(source_root, "state.json")):
+        raise ValueError(f"source run has no state.json: {source_root}")
+    if os.path.exists(destination_root):
+        raise RunDirectoryExistsError(destination_root)
+    if os.path.commonpath([source_root, destination_root]) == source_root:
+        raise ValueError("destination run must not be inside the source run")
+
+    state_path = os.path.join(source_root, "state.json")
+    source_state_bytes = open(state_path, "rb").read()
+    source_digest = hashlib.sha256(source_state_bytes).hexdigest()
+    source_state = ProofRunState.model_validate_json(source_state_bytes)
+    cursor = _custom_resume_cursor(
+        source_root,
+        source_state,
+        step=step,
+        candidate=candidate,
+        stage=stage,
+        attempt=attempt,
+        reviewer_attempt=reviewer_attempt,
+    )
+
+    destination_parent = os.path.dirname(destination_root)
+    os.makedirs(destination_parent, exist_ok=True)
+    temporary_root = tempfile.mkdtemp(
+        prefix=f".{os.path.basename(destination_root)}.branch-",
+        dir=destination_parent,
+    )
+    try:
+        def ignore(path, names):
+            if os.path.abspath(path) != source_root:
+                return []
+            return [
+                name for name in names
+                if name in {"archive", "failure", "final", "tmp", "log.txt"}
+            ]
+
+        shutil.copytree(
+            source_root,
+            temporary_root,
+            dirs_exist_ok=True,
+            ignore=ignore,
+        )
+        if hashlib.sha256(open(state_path, "rb").read()).hexdigest() != source_digest:
+            raise ValueError("source run changed while the branch snapshot was being copied")
+
+        copied_state_path = os.path.join(temporary_root, "state.json")
+        copied_data = json.load(open(copied_state_path))
+        copied_data = _rebase_run_paths(copied_data, source_root, temporary_root)
+        copied_data["informal_problem_path"] = os.path.join(
+            temporary_root, "input", "informal_problem.md"
+        )
+        copied_data["context_path"] = os.path.join(
+            temporary_root, "input", "context.lean"
+        )
+        copied_data["initial_body_path"] = os.path.join(
+            temporary_root, "input", "body_initial.lean"
+        )
+        if copied_data.get("placeholder_path"):
+            copied_data["placeholder_path"] = os.path.join(
+                temporary_root, "input", "placeholder.lean"
+            )
+        with open(copied_state_path, "w") as output:
+            json.dump(copied_data, output, indent=2)
+            output.write("\n")
+
+        lineage_root = os.path.join(temporary_root, "lineage")
+        os.makedirs(lineage_root, exist_ok=True)
+        source_log = os.path.join(source_root, "log.txt")
+        if os.path.isfile(source_log):
+            shutil.copy2(source_log, os.path.join(lineage_root, "source.log"))
+        open(os.path.join(temporary_root, "log.txt"), "w").close()
+        with open(os.path.join(temporary_root, "branch.json"), "w") as output:
+            json.dump({
+                "source_run": source_root,
+                "destination_run": destination_root,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "source_state_sha256": source_digest,
+                "checkpoint": {
+                    "step": step,
+                    "candidate": candidate,
+                    "stage": stage,
+                    "attempt": attempt,
+                    "reviewer_attempt": reviewer_attempt,
+                },
+                "accounting_reset": [
+                    "runtime_seconds",
+                    "total_lean_compiles",
+                    "token_and_cost_usage",
+                ],
+            }, output, indent=2)
+            output.write("\n")
+
+        copied_state = StateManager.load(temporary_root)
+        _validate_resume_prefix(Paths(destination_parent, os.path.basename(temporary_root)),
+                                copied_state, cursor)
+        final_data = _rebase_run_paths(
+            json.load(open(copied_state_path)), temporary_root, destination_root
+        )
+        with open(copied_state_path, "w") as output:
+            json.dump(final_data, output, indent=2)
+            output.write("\n")
+        os.rename(temporary_root, destination_root)
+    except Exception:
+        if os.path.isdir(temporary_root):
+            shutil.rmtree(temporary_root)
+        raise
+
+    return run_problem(
+        "",
+        reasoning_offline=reasoning_offline,
+        translation_offline=translation_offline,
+        reviewer_offline=reviewer_offline,
+        _resume_root=destination_root,
+        _resume_cursor=cursor,
     )
 
 

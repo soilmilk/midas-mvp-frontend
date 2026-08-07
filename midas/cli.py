@@ -3,7 +3,8 @@
 midas-mvp CLI (SPEC Phase 5). Usable without reading source:
 
   python3 -m midas.cli run <problem>          # id or dir: p4_n5_30  OR  problems/p4_n5_30
-  python3 -m midas.cli resume <problem_id>    # continue an interrupted terminal proof step
+  python3 -m midas.cli resume <problem_id>    # continue an interrupted or runtime-limited run
+  python3 -m midas.cli custom-resume <source> <destination> --step N --candidate N --stage STAGE
   python3 -m midas.cli status <problem_id>
   python3 -m midas.cli attempts <problem_id> [--step N] [--failed-only]
   python3 -m midas.cli show <problem_id> <step> <candidate> <attempt>
@@ -100,12 +101,55 @@ def cmd_resume(args):
             + _usage_summary(state.stats.llm_usage.total))
 
 
+def cmd_custom_resume(args):
+    from midas.loop import custom_resume_problem
+    from midas.artifacts import RunDirectoryExistsError
+    source = _run_root(args, args.source_run_id)
+    destination = _run_root(args, args.new_run_id)
+    if not os.path.exists(os.path.join(source, "state.json")):
+        sys.exit(f"no run found at {source}")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        print("warning: OPENROUTER_API_KEY not set — live agents will fail. `source ~/.midas-mvp.env`",
+              file=sys.stderr)
+    try:
+        state = custom_resume_problem(
+            source,
+            destination,
+            step=args.step,
+            candidate=args.candidate,
+            stage=args.stage,
+            attempt=args.attempt,
+            reviewer_attempt=args.reviewer_attempt,
+        )
+    except (ValueError, RunDirectoryExistsError) as error:
+        sys.exit(f"cannot custom-resume {args.source_run_id}: {error}")
+    print(f"{args.new_run_id}: {state.status}"
+          + (f" ({state.failure_reason})" if state.failure_reason else "")
+          + f"  | source={args.source_run_id} accepted={state.stats.accepted_proof_steps} "
+            f"llm={state.stats.total_llm_calls} compiles={state.stats.total_lean_compiles} "
+            f"attempts={state.stats.total_lean_attempts} "
+            f"runtime={state.stats.runtime_seconds:.0f}s "
+            + _usage_summary(state.stats.llm_usage.total))
+
+
 def cmd_status(args):
-    st = _load_state(_run_root(args, args.problem_id))
+    root = _run_root(args, args.problem_id)
+    st = _load_state(root)
     print(f"problem : {st.problem_id}")
     print(f"mode    : {st.problem_mode}")
     print(f"status  : {st.status}" + (f"  ({st.failure_reason})" if st.failure_reason else ""))
     print(f"header  : {st.formal_theorem_header!r}")
+    branch_path = os.path.join(root, "branch.json")
+    if os.path.isfile(branch_path):
+        branch = json.load(open(branch_path))
+        checkpoint = branch.get("checkpoint", {})
+        print(f"branch  : {branch.get('source_run', '')}")
+        print(
+            "checkpoint: "
+            f"step={checkpoint.get('step')} candidate={checkpoint.get('candidate')} "
+            f"stage={checkpoint.get('stage')} attempt={checkpoint.get('attempt')} "
+            f"reviewer_attempt={checkpoint.get('reviewer_attempt')}"
+        )
     if st.problem_mode == "hard":
         print(f"placeholder status : {st.placeholder_status or 'unknown'}")
         print(f"placeholder name   : {st.placeholder_name or '(unknown)'}")
@@ -480,10 +524,25 @@ def main(argv=None):
 
     rs = sub.add_parser(
         "resume",
-        help="resume the earliest interrupted LLM call in the terminal proof step",
+        help="resume an interrupted call or the next unit after a runtime cutoff",
     )
     rs.add_argument("problem_id")
     rs.set_defaults(fn=cmd_resume)
+
+    cr = sub.add_parser(
+        "custom-resume",
+        help="branch a run and retry an exact recorded pipeline call",
+    )
+    cr.add_argument("source_run_id")
+    cr.add_argument("new_run_id")
+    cr.add_argument("--step", type=int, required=True)
+    cr.add_argument("--candidate", type=int, required=True)
+    cr.add_argument(
+        "--stage", choices=("reasoner", "translator", "reviewer"), required=True
+    )
+    cr.add_argument("--attempt", type=int)
+    cr.add_argument("--reviewer-attempt", type=int)
+    cr.set_defaults(fn=cmd_custom_resume)
 
     s = sub.add_parser("status", help="show a run's status + step summary")
     s.add_argument("problem_id"); s.set_defaults(fn=cmd_status)

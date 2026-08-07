@@ -447,7 +447,8 @@ problem run directory: rename that directory before starting the problem again.
 | command | what it does |
 |---|---|
 | `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree, `state.json`, and `log.txt`; refuses an existing run folder. |
-| `resume <problem_id>` | Resume the earliest interrupted reasoner, translator, or reviewer call in the terminal failed proof step. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
+| `resume <problem_id>` | Resume the earliest interrupted call, or continue from the next unfinished translator attempt, candidate, or proof step after a runtime cutoff. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
+| `custom-resume <source> <destination> --step N --candidate N --stage ...` | Branch any run into a new folder and retry an exact recorded reasoner, translator, or reviewer call. The source is never modified. **Needs `OPENROUTER_API_KEY`.** |
 | `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
 | `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
 | `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |
@@ -457,6 +458,8 @@ Examples:
 ```bash
 python3 -m midas.cli status hard_problem
 python3 -m midas.cli resume IMO2026P3
+python3 -m midas.cli custom-resume IMO2026P3 IMO2026P3_branch \
+  --step 4 --candidate 2 --stage translator --attempt 1
 python3 -m midas.cli attempts p2_lemma --failed-only
 python3 -m midas.cli show p3_imo 4 1 1        # proof_step_004 / candidate 1 / attempt 1
 python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
@@ -467,14 +470,36 @@ python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result of
 `resume` is intentionally automatic: it examines only the terminal failed or incomplete proof
 step and selects the earliest provider call recorded as failed or pending. A failed translator call
 reuses the saved informal candidate and prior compiler-repair transaction; a failed reasoner call
-regenerates that candidate. Runs that completed successfully, or failed without an interrupted LLM
-call, are not resumable.
+regenerates that candidate. For a `max_runtime_seconds` failure with no interrupted call, resume
+continues at the next unstarted translation attempt, candidate, or proof step without replaying
+completed work. Successful runs and unrelated failures without an interrupted call remain
+non-resumable.
 
 Before continuing, Midas moves every artifact at and after the selected checkpoint plus the old
 failure report into `runs/<problem_id>/archive/resume_<timestamp>/`. The original `state.json` is
 stored there as well. `log.txt` is appended with a new resume-session delimiter. LLM usage, Lean
 attempts, compiles, and runtime remain cumulative, while the runtime deadline starts fresh for each
-resume invocation.
+resume invocation. The saved `runs/<problem_id>/config.json` is authoritative during resume; edit
+that snapshot, rather than the source problem config, when a resumed session needs different limits.
+
+### Branching from an exact checkpoint
+
+`custom-resume` accepts failed, running, or successful source runs and requires a new destination
+run ID. The destination must not exist. Selectors identify an already-recorded call:
+
+- `--stage reasoner` requires `--step` and `--candidate` only.
+- `--stage translator` also requires `--attempt`.
+- `--stage reviewer` requires both `--attempt` and `--reviewer-attempt`.
+
+The branch retains work before the selected call, retries that call, and discards the copied suffix;
+the complete source run remains unchanged. `branch.json` records the source, state digest, checkpoint,
+creation time, and accounting resets, while `lineage/source.log` preserves the source log. Persisted
+artifact paths are rebased to the destination.
+
+Accepted-step, Lean-attempt, and per-role LLM-call counts are recomputed from the retained prefix.
+Runtime, Lean compile count, and token/cost usage reset because the current artifacts do not contain
+enough per-call accounting to reconstruct those values without guessing. New branch activity then
+accumulates normally.
 
 ---
 

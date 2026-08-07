@@ -1,12 +1,9 @@
-theorem functional_inequality_hard :
-    ∀ f : ℝ → ℝ,
-      f ∈ functional_inequality_solution ↔
-        (∀ x : ℝ, 0 < x → 0 < f x) ∧
-        ∀ x y : ℝ,
-          0 < x →
-          0 < y →
-          Real.sqrt ((x ^ 2 + (f y) ^ 2) / 2)
-              ≥ (f x + y) / 2 ∧
-          (f x + y) / 2
-              ≥ Real.sqrt (x * f y) := by
+theorem imo_2026_p5 :
+    ∀ f : PosReal → PosReal,
+      f ∈ imo_2026_p5_solution ↔
+        ∀ x y : PosReal,
+          Real.sqrt (((x : ℝ) ^ 2 + (f y : ℝ) ^ 2) / 2)
+              ≥ ((f x : ℝ) + (y : ℝ)) / 2 ∧
+          ((f x : ℝ) + (y : ℝ)) / 2
+              ≥ Real.sqrt ((x : ℝ) * (f y : ℝ)) := by
   sorry
