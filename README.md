@@ -1,11 +1,20 @@
 # Midas MVP
 
-A **lemma-first, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
-Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small proof step) and a
-**translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until the theorem
-is proved with no `sorry`, or a budget is exhausted. Every step is checked by the Lean compiler
-in accumulated context. If every Lean translation of an informal candidate fails, its exact `NEXT STEP`
-is shown to the reasoner so the next candidate can simplify or reformulate it.
+A **lemma-oriented, bounded, linear proof-search loop** for Lean 4. Given an informal problem and a
+Lean theorem header, it drives two LLMs — a **reasoner** (GPT-5, proposes one small English step) and
+a **translator** (Claude, renders it to Lean) — through a **verify → accept-or-retry** loop until an
+explicit final action compiles without `sorry`, or a budget is exhausted. Every proposed declaration
+and theorem-body update is checked by Lean in accumulated context.
+
+Midas supports two problem modes:
+
+- **Easy Mode** completes one unfinished theorem.
+- **Hard Mode** keeps one unresolved definition immutable during exploration, then fills that
+  definition and completes the theorem in one atomic final transaction.
+
+The reasoner searches only in English. It never receives Lean source or compiler diagnostics. If
+every Lean translation of an English candidate fails, its exact `NEXT STEP` is shown to the
+reasoner so the next candidate can simplify or reformulate it.
 
 > **Training / modifying it:** the intended way to improve behavior is to improve the two prompt files
 > in `considerations/` from observed run failures — the metaoptimizing loop. **Read the diagram below`** for
@@ -92,12 +101,15 @@ pip install pydantic openai
 ```
 
 
-**7. Testing the install — NO key needed** (proves Lean + Python are wired up correctly).
+**7. Testing the install — NO key needed.**
+
 ```bash
-python3 verifier/run_phase1.py       # must end: PHASE 1 GATE: PASS
-python3 tests/test_offline.py        # must end: PHASE 2 OFFLINE SPINE: PASS
-python3 tests/test_loop_offline.py   # must end: OFFLINE LOOP: PASS
+python3 tests/run_all.py
 ```
+
+The runner executes every deterministic gate sequentially and makes no model API calls. The
+fresh/warm parity gate runs when the local warm executable and Mathlib `LEAN_PATH` are available;
+otherwise that environment-dependent gate reports an explicit `SKIP`.
 
 **8. Run a real Lean 4 problem** (needs your OpenRouter key).
 Every time you reopen the workspace, run the following commands:
@@ -125,29 +137,67 @@ python3 -m midas.cli status p4_n5_30
 
 ---
 
-## Adding a problem of your own
+## Adding a problem
 
-Create `problems/<id>/` with an `input/` dir and a `config.json`:
+Every problem explicitly or implicitly selects a mode in `config.json`:
 
+```json
+{
+  "problem_mode": "easy"
+}
 ```
+
+`problem_mode` is `"easy"` or `"hard"` and defaults to `"easy"` for old configurations.
+
+Easy Mode layout:
+
+```text
 problems/<id>/
-  input/
-    informal_problem.md     # the natural-language statement
-    context.lean            # definitions the theorem needs — NO imports (prelude supplies them)
-    body_initial.lean       # theorem <name> ... := by\n  sorry   (must end the header in ':= by')
   config.json
-  reference_solution.lean   # OPTIONAL; documents provability (the loop never reads it)
+  input/
+    informal_problem.md
+    context.lean
+    body_initial.lean
+  reference_solution.lean   # optional; the loop never reads it
+```
+
+Hard Mode adds one file:
+
+```text
+problems/<id>/
+  config.json               # contains "problem_mode": "hard"
+  input/
+    informal_problem.md
+    context.lean
+    placeholder.lean
+    body_initial.lean
+  reference_solution.lean   # optional
 ```
 
 Rules that matter:
-- `context.lean` are the definitions/object that the theorem uses. Contains **no imports** (put imports in `lean_prelude`).
-- `body_initial.lean` must contain exactly one theorem whose header ends in **`:= by`** (the loader
-  fails loudly otherwise). That header is stored and enforced **byte-for-byte** on every later body.
-- See problems/p3_imo for an example.
 
-- example for `config.json`:
+- `context.lean` contains the definitions the theorem needs and no imports; put imports in
+  `lean_prelude`.
+- `body_initial.lean` contains exactly one tactic-mode theorem whose header ends in `:= by`.
+  The header is stored and enforced byte-for-byte on every later body.
+- Hard Mode requires `placeholder.lean`; Easy Mode rejects it.
+- The supported placeholder is exactly one top-level tactic-mode `def` or `abbrev`,
+  optionally prefixed by `noncomputable`:
+
+  ```lean4
+  noncomputable def answer : ℝ := by
+    sorry
+  ```
+
+  Its header is preserved byte-for-byte. Imports, namespaces, auxiliary declarations, completed
+  declarations, term-style declarations, and declaration kinds other than `def` and `abbrev` are
+  rejected. A standalone `noncomputable` command is still forbidden in this file.
+
+Example `config.json`:
+
 ```json
 {
+  "problem_mode": "hard",
   "max_proof_steps": 8,
   "max_informal_candidates_per_proof_step": 3,
   "max_lean_translation_attempts_per_candidate": 3,
@@ -161,12 +211,126 @@ Rules that matter:
   ],
   "reasoning_model": "openai/gpt-5",
   "translation_model": "anthropic/claude-sonnet-5",
+  "reviewer_model": "openai/gpt-5",
   "reasoning_effort": "low",
+  "translator_reasoning_effort": "low",
+  "reviewer_reasoning_effort": "low",
+  "max_reviewer_call_attempts": 2,
   "verifier_backend": "warm"
 }
 ```
-- `lean_prelude` — **full Lean lines**, prepended verbatim (e.g. `"import Mathlib"`, `"set_option maxHeartbeats 0"`).
-- `reasoning_effort` — `minimal | low | medium | high`. **Biggest latency lever**: gpt-5 is a reasoning model (≈1.5 s at `minimal`, ≈6 s at `low`, ≈10–13 s default). `minimal` = zero reasoning tokens (fast but shallow). See `NOTES.md`.
+
+Semantic review is mandatory after every compiling translator transaction. If `reviewer_model`
+or `reviewer_reasoning_effort` is omitted, it inherits the translator setting. A reviewer outage
+or malformed response is retried up to `max_reviewer_call_attempts`, then fails closed.
+
+- `lean_prelude` contains full Lean lines, prepended verbatim.
+- `reasoning_effort` is `minimal | low | medium | high`. It is the largest latency lever;
+  `minimal` is fastest but may use no reasoning tokens. See `NOTES.md`.
+- `translator_reasoning_effort` independently controls translator thinking. If omitted, the
+  model/provider default applies. OpenRouter accepts `none | minimal | low | medium | high |
+  xhigh | max`, subject to the selected model's supported levels.
+
+### Hard Mode protocol and transaction
+
+Every new reasoner action includes non-empty `NEXT STEP`, `PROOF`, and `IDEAS FOR THE FUTURE`
+fields plus an exact `IS_FINAL_STEP: True` or `IS_FINAL_STEP: False`. Future ideas form a rolling,
+unproved roadmap; only the roadmap from an accepted step is passed to the next reasoner call.
+Previously accepted steps are shown chronologically and remain formally verified, while later
+reasoners may reassess which facts are relevant as the roadmap changes.
+
+- Easy Mode never uses an `ANSWER` field.
+- A non-final Hard Mode action forbids `ANSWER`.
+- A final Hard Mode action requires one non-empty English/mathematical `ANSWER`; it is not Lean
+  source and is not persisted as an accepted answer branch.
+
+A non-final action, and any Easy Mode action, uses:
+
+```text
+INTERMEDIATE REASONING:
+...
+
+NEXT STEP:
+...
+
+PROOF:
+...
+
+IS_FINAL_STEP: True | False
+
+IDEAS FOR THE FUTURE:
+<non-empty roadmap; this is always the final section>
+```
+
+A final Hard action instead ends with:
+
+```text
+IS_FINAL_STEP: True
+
+ANSWER:
+<concrete answer in English or mathematical notation>
+
+IDEAS FOR THE FUTURE:
+None — the theorem is complete
+```
+
+Exploration translations contain `NEW DECLARATIONS` and a complete `UPDATED THEOREM BODY`.
+Easy final translations contain `NEW DECLARATIONS` and a complete `FINAL THEOREM BODY`. Hard final
+translations contain `NEW DECLARATIONS`, `FILLED PLACEHOLDER`, and `FINAL THEOREM BODY`, in that
+order. An exploration translation cannot fill the placeholder.
+
+Entries in `NEW DECLARATIONS` may use `noncomputable` as a declaration modifier, for example
+`noncomputable def angleMod ...`. A standalone command such as `noncomputable section` remains
+forbidden, as does `noncomputable` in the theorem-body region.
+
+The selected translator schema is exact:
+
+```text
+Exploration:       NEW DECLARATIONS → UPDATED THEOREM BODY
+Easy final:        NEW DECLARATIONS → FINAL THEOREM BODY
+Hard final:        NEW DECLARATIONS → FILLED PLACEHOLDER → FINAL THEOREM BODY
+```
+
+Instead of a Lean transaction, the translator may reject an unsuitable informal candidate:
+
+```text
+INTERMEDIATE REASONING:
+<check the exact claim against the hypotheses and formal context>
+
+TRANSLATION REJECTED:
+KIND: MATHEMATICALLY_INCORRECT
+REASON:
+<English explanation identifying the precise defect>
+```
+
+The other accepted kinds are `MISSING_ASSUMPTION` and `INCOMPATIBLE_WITH_CONTEXT`.
+`HARD_TO_FORMALIZE` is deliberately not accepted: uncertainty about library names, tedious
+algebra, or missing infrastructure must produce a concrete Lean transaction so compiler feedback
+can guide retries. Every outcome starts with non-empty intermediate reasoning; Lean transactions
+also require a non-empty plan. A valid rejection skips compilation and all remaining translation
+attempts for that informal candidate, then returns control to the reasoner. Exploration bodies may
+retain only one inherited, final standalone `sorry`; adding or nesting theorem-body holes rejects
+the candidate before compilation.
+
+Every section contains one complete `lean4` code fence. The theorem sections contain the entire
+target theorem and preserve its stored header byte-for-byte.
+
+Every Hard Mode source is assembled as:
+
+```text
+prelude
+context
+previously accepted declarations
+candidate declarations
+placeholder
+theorem body
+```
+
+Candidate declarations are compiled in a first pass that excludes the placeholder, so they cannot
+refer to its symbol. Final declarations, the filled placeholder, and the final theorem body are
+verified against one frozen accepted prefix and committed only after the complete independently
+reconstructed file compiles without `sorry`. A failed final proposal commits nothing and uses the
+normal translation-retry and English-decomposition flow.
 
 --- 
 
@@ -206,17 +370,67 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 
 <img width="297" height="417" alt="image" src="https://github.com/user-attachments/assets/8e99997f-233d-4ce7-a011-e3ca2eda9b7e" />
 
+The run root contains `log.txt`, whose indented events use elapsed timestamps beginning at
+`00h 00m 00s 000ms`. It records models, waits, Lean compilation stages, artifact paths, retries,
+diagnostics, acceptance decisions, and final totals. The console mirrors a concise subset and
+flushes each event immediately, so its last line identifies the current or latest activity.
+
+Each successful LLM response also logs the provider-reported prompt, completion, total,
+reasoning, and cached token counts plus OpenRouter's charged `cost_credits`. The final totals are
+mirrored in `state.json` under `stats.llm_usage`, split into `total`, `reasoner`, and `translator`.
+The `calls_with_token_usage` and `calls_with_cost` counters expose responses where provider
+accounting was unavailable; Midas does not estimate missing costs from model price tables.
+Legacy states load with their historical call count but zero accounted token/cost calls.
+
+Hard Mode preserves the original `input/placeholder.lean`. Exploration attempts store
+`declarations.lean`, `body.lean`, and `compile.json`; Hard finalization attempts additionally store
+their proposed `placeholder.lean`. Every compiled attempt also retains
+`declaration_check_input.lean` and `body_check_input.lean`; final attempts retain
+`final_check_input.lean`. Compile-passing attempts retain reviewer prompts, outputs, and errors under
+`semantic_reviews/reviewer_attempt_NNN/`. Failed final proposals remain attempt artifacts only.
+
+Artifacts are persisted in stages: pending state and prompts before model calls, raw responses
+before parsing, parsed Lean regions before verification, and compile reports after verification.
+The input directory retains `context_check.json` and `initial_body_check.json` from startup
+validation.
+
+A successful Hard Mode run writes:
+
+```text
+final/
+  solution.lean
+  solution.md
+  placeholder.lean
+  body.lean
+```
+
+The accepted final proof step also contains its declarations, filled placeholder, and theorem body.
+
 ---
 
 ## Attempt statuses
 
-`pending · parse_error · format_failed · lemma_failed · body_failed · accepted · final_success · final_reconstruction_failed`
+Common statuses are:
 
-- **`parse_error`** — raw model output couldn't be parsed into the two required sections.
-- **`format_failed`** — parsed, but broke a structure rule (sorry in a declaration, header changed, repeated name, >1 theorem).
+`pending · translation_call_failed · parse_error · format_failed · placeholder_format_failed · lemma_failed · body_failed · placeholder_fill_failed · semantic_misalignment · reviewer_call_failed · reviewer_parse_error · accepted · final_success · final_reconstruction_failed · hard_full_reconstruction_failed`
+
+- **`translation_call_failed`** — the translator call returned no response. The attempt directory
+  retains the prompt, an empty `raw_translator_output.md`, and the exception in `compile.json`;
+  every Lean check is `not_run`.
+- **`parse_error`** — raw model output did not match the selected attempt schema.
+- **`format_failed` / `placeholder_format_failed`** — parsed output broke a structural rule.
 - **`lemma_failed` / `body_failed`** — the declaration / body compile failed.
-- **`accepted`** — both compile, body still has `sorry` (progress).
-- **`final_success`** — body has no `sorry` and the independently reconstructed `final/solution.lean` compiles clean.
+- **`placeholder_fill_failed`** — a Hard final suffix failed in the filled-placeholder region.
+- **`semantic_misalignment`** — Lean compiled, but the reviewer found that the transaction did not
+  establish the reasoner's complete English step. Its feedback is sent to the next translator attempt.
+- **`reviewer_call_failed` / `reviewer_parse_error`** — semantic review remained unavailable after
+  its configured retries. The attempt fails closed.
+- **`accepted`** — a non-final action passed both checkpoint stages. The theorem body is not
+  required to contain `sorry`; it also passed semantic alignment review.
+- **`final_success`** — the selected final transaction and independently reconstructed
+  `final/solution.lean` compile without `sorry`.
+- **`final_reconstruction_failed` / `hard_full_reconstruction_failed`** — checkpoint verification
+  passed, but the independent full-file gate rejected the final source.
 
 ---
 
@@ -227,30 +441,74 @@ Everything a run produces (and everything the metaoptimizer feeds on) is under `
 > you get `ModuleNotFoundError: No module named 'midas'`.
 
 All commands are `python3 -m midas.cli <cmd>`. Runs are written under `runs/<problem_id>/`
-(override the location with `--runs-root DIR`).
+(override the location with `--runs-root DIR`). A run never overwrites or appends to an existing
+problem run directory: rename that directory before starting the problem again.
 
 | command | what it does |
 |---|---|
-| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree + `state.json`. |
-| `status <problem_id>` | Status, theorem header, stats, and a per-proof-step summary. |
-| `attempts <problem_id> [--step N] [--failed-only]` | Table of every translation attempt and its status; the `declarations?` column shows whether the step introduced a lemma. |
-| `show <problem_id> <step> <cand> <attempt>` | Dump one attempt's reasoning prompt, translator prompt, **raw model output**, parsed `declarations.lean`/`body.lean`, and `compile.json`. |
-| `replay <problem_id> <step> <cand> <attempt>` | **Recompile that one checkpoint via the verifier only — no LLM call.** For debugging a failure without burning API calls. |
+| `run <problem_dir>` | Run the loop on a problem. **Needs `OPENROUTER_API_KEY`.** Writes the full artifact tree, `state.json`, and `log.txt`; refuses an existing run folder. |
+| `resume <problem_id>` | Resume the earliest interrupted call, or continue from the next unfinished translator attempt, candidate, or proof step after a runtime cutoff. Uses the saved run inputs/config and archives the superseded suffix first. **Needs `OPENROUTER_API_KEY`.** |
+| `custom-resume <source> <destination> --step N --candidate N --stage ...` | Branch any run into a new folder and retry an exact recorded reasoner, translator, or reviewer call. The source is never modified. **Needs `OPENROUTER_API_KEY`.** |
+| `status <problem_id>` | Status, mode, theorem header, Hard placeholder state, statistics, and proof-step summaries. |
+| `attempts <problem_id> [--step N] [--failed-only]` | Table of attempts with attempt kind, status, declarations, and placeholder presence. |
+| `show <problem_id> <step> <cand> <attempt>` | Dump prompts, raw output, parsed declarations/placeholder/body artifacts, and `compile.json`. |
+| `replay <problem_id> <step> <cand> <attempt>` | Recompile one saved transaction and display its saved semantic verdict; no LLM call. |
 
 Examples:
 ```bash
+python3 -m midas.cli status hard_problem
+python3 -m midas.cli resume IMO2026P3
+python3 -m midas.cli custom-resume IMO2026P3 IMO2026P3_branch \
+  --step 4 --candidate 2 --stage translator --attempt 1
 python3 -m midas.cli attempts p2_lemma --failed-only
 python3 -m midas.cli show p3_imo 4 1 1        # proof_step_004 / candidate 1 / attempt 1
 python3 -m midas.cli replay p3_imo 4 1 1      # reproduce that compile result offline
 ```
 
+### Resuming an interrupted run
+
+`resume` is intentionally automatic: it examines only the terminal failed or incomplete proof
+step and selects the earliest provider call recorded as failed or pending. A failed translator call
+reuses the saved informal candidate and prior compiler-repair transaction; a failed reasoner call
+regenerates that candidate. For a `max_runtime_seconds` failure with no interrupted call, resume
+continues at the next unstarted translation attempt, candidate, or proof step without replaying
+completed work. Successful runs and unrelated failures without an interrupted call remain
+non-resumable.
+
+Before continuing, Midas moves every artifact at and after the selected checkpoint plus the old
+failure report into `runs/<problem_id>/archive/resume_<timestamp>/`. The original `state.json` is
+stored there as well. `log.txt` is appended with a new resume-session delimiter. LLM usage, Lean
+attempts, compiles, and runtime remain cumulative, while the runtime deadline starts fresh for each
+resume invocation. The saved `runs/<problem_id>/config.json` is authoritative during resume; edit
+that snapshot, rather than the source problem config, when a resumed session needs different limits.
+
+### Branching from an exact checkpoint
+
+`custom-resume` accepts failed, running, or successful source runs and requires a new destination
+run ID. The destination must not exist. Selectors identify an already-recorded call:
+
+- `--stage reasoner` requires `--step` and `--candidate` only.
+- `--stage translator` also requires `--attempt`.
+- `--stage reviewer` requires both `--attempt` and `--reviewer-attempt`.
+
+The branch retains work before the selected call, retries that call, and discards the copied suffix;
+the complete source run remains unchanged. `branch.json` records the source, state digest, checkpoint,
+creation time, and accounting resets, while `lineage/source.log` preserves the source log. Persisted
+artifact paths are rebased to the destination.
+
+Accepted-step, Lean-attempt, and per-role LLM-call counts are recomputed from the retained prefix.
+Runtime, Lean compile count, and token/cost usage reset because the current artifacts do not contain
+enough per-call accounting to reconstruct those values without guessing. New branch activity then
+accumulates normally.
+
 ---
 
 ## Training / modifying it
 
-The system's behavior is shaped by two prompt files the models read on every call:
+The system's behavior is shaped by three prompt files the models read on every call:
 - `considerations/INFORMAL_REASONING_CONSIDERATIONS.md` — rules for the reasoner (§9).
 - `considerations/FORMAL_TRANSLATION_CONSIDERATIONS.md` — rules for the translator (§10).
+- `considerations/SEMANTIC_REVIEW_CONSIDERATIONS.md` — strict alignment criteria for compiling transactions.
 
 NOTE: When testing/running proofs, please put your findings here instead of directly editing the prompts, we will accumulate all of y'alls feedback and then edit accordingly.
 https://docs.google.com/document/d/1dXjaZKxNOavIGCYk2uyY2fPjsBhnSYR5mQ_5L5mlsu0/edit?usp=sharing
@@ -284,7 +542,7 @@ midas/                      the loop: models, agents, parser, structure, verifie
 verifier/                   checkpoint_builder.py (fresh `lean` per checkpoint) + phase-1 gate
 warm-server/                Lean/Lake warm verifier executable for Mathlib-heavy checks
 problems/                   p1_sanity, p2_lemma, p3_imo (+ toy), each input/ + config.json
-tests/                      offline pipeline + offline loop tests (no API key)
+tests/                      offline gates plus optional real fresh/warm parity (no API key)
 ```
 
 ---

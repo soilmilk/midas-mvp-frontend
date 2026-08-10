@@ -11,15 +11,24 @@ Both return the same `CheckpointResult`, so the proof-search loop does not chang
 with `config.verifier_backend` (`"fresh"` or `"warm"`).
 
 ## Why use warm
-The checkpoint semantics midas-mvp needs are fixed: declaration check with no `sorry`, then body check
-with `sorry` allowed, both in accumulated context. The fresh backend implements that by invoking
-`lean` for every checkpoint. That is fine for Core/Std problems, but a Mathlib prelude repays
-`import Mathlib` on every checkpoint.
+The checkpoint semantics are fixed:
+
+1. compile the stable prefix plus candidate declarations with no `sorry`;
+2. only if that succeeds, compile the suffix in the same accumulated context.
+
+For Easy Mode the suffix is the theorem body. For Hard exploration it is the original unresolved
+placeholder followed by the theorem body. For Hard finalization it is the filled placeholder
+followed by the final theorem body. Exploration permits `sorry`; finalization sets
+`require_closed=True` and rejects it anywhere in the complete submitted source.
+
+The fresh backend implements those checks by invoking `lean` for every checkpoint. That is fine for
+Core/Std problems, but a Mathlib prelude repays `import Mathlib` on every checkpoint.
 
 The warm backend starts one long-lived Lean process, loads Mathlib once from `LEAN_PATH`, and sends
-each checkpoint block over stdin. The current adapter uses the stateless `warm` executable: midas-mvp
-passes the accepted declarations on every call, and `warm` verifies each submitted block against the
-resident Mathlib environment.
+each checkpoint block over stdin. The current adapter uses the stateless `warm` executable:
+Midas passes the accepted declarations on every call, and `warm` verifies each submitted block
+against the resident Mathlib environment. Both backends use the shared source renderer, preserving
+the order `context → declarations → placeholder → theorem`.
 
 ## When to use which
 
@@ -68,6 +77,28 @@ resident Mathlib environment.
 body, partial proof, and broken body. Verdicts matched. First real use: `p4_n5_30` (`30 ∣ n⁵−n`)
 reached `final_success` on the warm backend in 770 s (13 steps), while the fresh backend timed out at
 12 steps in 1240 s. The main difference was per-checkpoint `import Mathlib` versus one warm load.
+
+## Backend parity gate
+
+The deterministic real-process parity matrix covers:
+
+- Hard exploration with both holes open;
+- a declaration that refers to the later placeholder;
+- an invalid filled placeholder;
+- a valid placeholder with an invalid theorem;
+- a completely valid final transaction;
+- `sorry` remaining while a closed source is required.
+
+For each case it compares declaration status, suffix status, `contains_sorry`, acceptance, and the
+diagnostic source region when an error exists:
+
+```bash
+python3 tests/test_hardmode_backend_parity.py
+```
+
+This command makes no network or model calls. It reports an explicit `SKIP` with exit code zero when
+the warm executable or Mathlib `LEAN_PATH` is unavailable. Deterministic source-order and warm-wire
+tests remain part of `tests/test_hardmode_verifier.py` in every environment.
 
 ## Notes
 

@@ -1,9 +1,9 @@
 {
-  "max_proof_steps": 20,
+  "max_proof_steps": 80,
   "max_informal_candidates_per_proof_step": 3,
   "max_lean_translation_attempts_per_candidate": 3,
-  "max_total_lean_attempts": 80,
-  "max_runtime_seconds": 2000,
+  "max_total_lean_attempts": 180,
+  "max_runtime_seconds": 18000,
   "lean_prelude": [
     "import Mathlib",
     "import Aesop",

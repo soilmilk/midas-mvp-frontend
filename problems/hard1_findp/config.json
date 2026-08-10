@@ -1,0 +1,13 @@
+{
+  "max_proof_steps": 10,
+  "max_informal_candidates_per_proof_step": 3,
+  "max_lean_translation_attempts_per_candidate": 3,
+  "max_total_lean_attempts": 40,
+  "max_runtime_seconds": 600,
+  "lean_prelude": ["import Mathlib"],
+  "reasoning_model": "openai/gpt-5",
+  "translation_model": "anthropic/claude-sonnet-5",
+  "reasoning_effort": "low",
+  "verifier_backend": "warm",
+  "problem_mode": "hard"
+}

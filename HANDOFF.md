@@ -1,8 +1,10 @@
 # HANDOFF — training & evolving midas-mvp
 
-For the team picking this up. The MVP loop works end to end; the job now is to **make it
-lemma-first in practice** and improve its success rate. This doc explains *how you train it*, where
-the evidence lives, and the one structural change the run data says you need.
+For the team picking this up. The Easy and Hard Mode loops work end to end; the job now is to
+**make the system lemma-first in practice** and improve its success rate. Hard Mode itself is a
+separate concern: it adds an unresolved definition, preserves it during English-space exploration,
+and fills it atomically with the final theorem. This doc explains how to train the models, where the
+evidence lives, and the structural change the earlier run data says you need.
 
 ## The mental model (kitchen)
 
@@ -67,9 +69,11 @@ progress metric → contract inversion → prompt reframe → harder problems.
 - **The Metaoptimizer agent** (SPEC §20): it consumes `runs/**` (all `compile.json`, failed
   prompts/outputs, `failure_report.md`, `state.json`) and writes suggestions to
   `EXTERNAL_AGENT_SUGGESTIONS.md`. The loop already logs everything it needs.
-- **A warm verifier backend** if you move to a Mathlib prelude (fresh `lean` per checkpoint costs
-  ~15–40 s each with Mathlib). Swap it behind `VerifierClient` — see the `midas_proof_verifier` repo.
 - **A progress checker** based on goal extraction at `sorry` positions (SPEC §15 future work).
+
+The warm verifier backend is already integrated. Keep its Hard Mode contract aligned with the fresh
+backend by running `python3 tests/test_hardmode_backend_parity.py` whenever a built warm executable
+and Mathlib `LEAN_PATH` are available; see `INTEGRATION.md`.
 
 ## Where to look first
 - `runs/p2_lemma/` — the fake/useless-progress failure, step by step (`attempts p2_lemma`).

@@ -23,6 +23,7 @@ import os, re, subprocess, time
 from dataclasses import asdict
 from pathlib import Path
 
+from midas.reconstructor import render_source
 from verifier.checkpoint_builder import CheckpointResult, CheckResult, CompileResult, Diag
 
 _NODE = re.compile(r"\[node \d+\]\s+\d+\s*ms\s+(.*)")
@@ -77,7 +78,6 @@ class WarmTxnBackend:
                 "$MIDAS_WARM_LEAN_PATH, $LEAN_PATH, or warm-server/mathlib_leanpath.txt. "
                 "See INTEGRATION.md.")
         self._lib = "Mathlib" if any("Mathlib" in l for l in config.lean_prelude) else "Mathlib"
-        print(f"[warm backend] loading {self._lib} once via {os.path.basename(binary)} …", flush=True)
         env = os.environ.copy()
         if lean_path:
             env["LEAN_PATH"] = lean_path
@@ -94,7 +94,14 @@ class WarmTxnBackend:
     def _submit(self, block: str) -> str:
         """Send one %%-delimited block; return the verdict text from the next `[node …]` line.
         Scanning to the next `[node …]` line naturally skips any trailing goal lines from a prior
-        OPEN verdict — hence the sentinel-hardening recommendation in the header."""
+        OPEN verdict — hence the sentinel-hardening recommendation in the header.
+
+        The warm server intentionally emits no node for an empty request. Treat an
+        empty Lean source as a successful no-op locally so callers never wait for a
+        response that cannot arrive.
+        """
+        if not block.strip():
+            return "ACCEPT  (empty source)"
         self.proc.stdin.write(block.rstrip() + "\n%%\n")
         self.proc.stdin.flush()
         while True:
@@ -109,12 +116,16 @@ class WarmTxnBackend:
     def _strip_imports(prelude):
         return [l for l in prelude if not l.strip().startswith("import ")]
 
-    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body):
+    def check(self, prelude, context, accepted_declarations, candidate_declaration, candidate_body,
+              *, placeholder="", require_closed=False):
         t0 = time.perf_counter()
         pre = self._strip_imports(prelude)
-        parts = ([context] + list(accepted_declarations)
-                 + ([candidate_declaration] if (candidate_declaration or "").strip() else []))
-        decl_block = "\n".join(pre + ["\n\n".join(parts)])
+        decl_block = render_source(
+            pre,
+            context,
+            accepted_declarations,
+            candidate_declarations=candidate_declaration,
+        ).text
 
         v1 = self._submit(decl_block)
         if not v1.startswith("ACCEPT"):
@@ -122,11 +133,20 @@ class WarmTxnBackend:
             return CheckpointResult(CheckResult("failed", _warm_diags(v1)), CheckResult("not_run"),
                                     None, 0.0, 0.0, wall, v1, "")
 
-        body_block = decl_block + "\n\n" + (candidate_body or "")
+        body_block = render_source(
+            pre,
+            context,
+            accepted_declarations,
+            candidate_declarations=candidate_declaration,
+            placeholder=placeholder,
+            theorem_body=candidate_body,
+        ).text
         v2 = self._submit(body_block)
-        body_ok = v2.startswith("ACCEPT") or v2.startswith("OPEN")
+        body_open = v2.startswith("OPEN")
+        body_ok = v2.startswith("ACCEPT") or (body_open and not require_closed)
         contains_sorry = v2.startswith("OPEN")
-        body_check = CheckResult("passed" if body_ok else "failed", [] if body_ok else _warm_diags(v2))
+        body_errors = [] if (v2.startswith("ACCEPT") or body_open) else _warm_diags(v2)
+        body_check = CheckResult("passed" if body_ok else "failed", body_errors)
         wall = (time.perf_counter() - t0) * 1000
         return CheckpointResult(CheckResult("passed"), body_check, contains_sorry, 0.0, 0.0, wall, v1, v2)
 
