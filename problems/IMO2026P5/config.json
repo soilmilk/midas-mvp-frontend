@@ -14,9 +14,9 @@
   "translation_model": "openai/gpt-5.6-sol-pro",
   "reviewer_model": "openai/gpt-5.6-sol-pro",
 
-  "reasoning_effort": "medium",
-  "translator_reasoning_effort": "medium",
-  "reviewer_reasoning_effort": "medium",
+  "reasoning_effort": "high",
+  "translator_reasoning_effort": "high",
+  "reviewer_reasoning_effort": "high",
 
   "verifier_backend": "warm",
   "warm_binary": "",
