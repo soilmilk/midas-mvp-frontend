@@ -95,13 +95,14 @@ cd ..
 OpenRouter's OpenAI-compatible API.
 ```bash
 # Assuming that you're still on the midas-mvp folder
-python3 -m venv .venv  # if it's a new EC2, might need to run 'sudo apt update' before that
+sudo apt update
+python3 -m venv .venv  # if it's a new EC2, it might tell you to run something before
 source .venv/bin/activate
 pip install pydantic openai
 ```
 
 
-**7. Testing the install — NO key needed.**
+**7. Testing the install (works even if you don't have a key)**
 
 ```bash
 python3 tests/run_all.py
