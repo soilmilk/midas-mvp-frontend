@@ -138,7 +138,15 @@ python3 -m midas.cli status p4_n5_30
 
 ---
 
-## Adding a problem
+## Adding a problem of your own (requires knowing what Easy Mode and Hard Mode are)
+A quick example: if we were to solve IMO 2026 P4, here's the difference:
+
+Hard Mode (original): "For which real values of $\theta$ can Mulan guarantee her victory in finitely many steps, no matter how Shan-Yu plays?"
+
+Easy Mode: "Prove that the θ's for which Mulan guarantee her victory in finitely many steps are: 180◦/n, for some integer n ≥ 2."
+
+Hard Mode requires conjecturing and proving the answer.
+Easy Mode already has the answer and requires proving that it's correct.
 
 Every problem explicitly or implicitly selects a mode in `config.json`:
 
