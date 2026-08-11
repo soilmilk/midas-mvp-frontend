@@ -16,8 +16,8 @@ from midas.loop import run_problem
 
 
 CONTEXT = "def IsCorrectAnswer (n : Nat) : Prop := n = 5\n"
-PLACEHOLDER_INITIAL = "def answer : Nat := by\n  sorry\n"
-BODY_INITIAL = "theorem main : IsCorrectAnswer answer := by\n  sorry\n"
+PLACEHOLDER_INITIAL = "def answer : Nat := sorry\n"
+BODY_INITIAL = "theorem main : IsCorrectAnswer answer := sorry\n"
 PLACEHOLDER_FINAL = "def answer : Nat := by\n  exact 5"
 BODY_FINAL = "theorem main : IsCorrectAnswer answer := by\n  exact final_helper"
 ALIGNED = (

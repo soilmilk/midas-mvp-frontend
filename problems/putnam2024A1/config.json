@@ -1,0 +1,20 @@
+{
+  "max_proof_steps": 100,
+  "max_informal_candidates_per_proof_step": 7,
+  "max_lean_translation_attempts_per_candidate": 7,
+  "max_total_lean_attempts": 1000,
+  "max_runtime_seconds": 36000,
+  "lean_prelude": [
+    "import Mathlib"
+  ],
+  "reasoning_model": "openai/gpt-5.6-sol-pro",
+  "translation_model": "openai/gpt-5.6-sol-pro",
+  "reviewer_model": "openai/gpt-5.6-sol-pro",
+
+  "reasoning_effort": "high",
+  "translator_reasoning_effort": "medium",
+  "reviewer_reasoning_effort": "medium",
+  
+  "verifier_backend": "warm",
+  "problem_mode": "hard"
+}

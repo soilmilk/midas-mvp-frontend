@@ -15,25 +15,34 @@ BY_MARKER = ":= by"
 
 
 class HeaderError(ValueError):
-    """Raised when body_initial.lean has no `:= by` — fail loudly, don't mis-parse (user tweak #3)."""
+    """Raised when body_initial.lean has no supported proof-hole body."""
 
 
 def extract_header(body_initial: str) -> str:
     """
-    Theorem header = from the theorem/lemma keyword through the first `:= by` (inclusive),
-    stored byte-exact (newlines preserved). Defensive: if `:= by` is absent, fail loudly.
+    Theorem header = the immutable declaration prefix, stored byte-exact.
+
+    Tactic-style bodies include `by` in that prefix. Official-dataset
+    expression holes of the form `:= sorry` end the prefix at `:=`.
     """
     idx = body_initial.find(BY_MARKER)
     if idx == -1:
-        raise HeaderError(
-            "body_initial.lean does not contain ':= by' — cannot extract the theorem header. "
-            "The target theorem must be written in tactic mode ending in ':= by'. "
-            f"Got:\n{body_initial.strip()[:400]}")
+        masked = _mask_comments(body_initial)
+        hole = re.search(r":=\s*sorry\s*$", masked)
+        if hole is None:
+            raise HeaderError(
+                "body_initial.lean must use a ':= sorry' expression hole or "
+                "a tactic body beginning with ':= by'. "
+                f"Got:\n{body_initial.strip()[:400]}")
+        idx = hole.start()
+        marker_length = len(":=")
+    else:
+        marker_length = len(BY_MARKER)
     start = re.search(r"(?m)^\s*(theorem|lemma)\b", body_initial)
     begin = start.start() if start else 0
     # trim only leading whitespace of the located declaration, keep internal bytes exact
-    header = body_initial[begin: idx + len(BY_MARKER)]
-    return header.lstrip("\n").rstrip() if start else header[: idx + len(BY_MARKER)]
+    header = body_initial[begin: idx + marker_length]
+    return header.lstrip("\n").rstrip() if start else header
 
 
 _DECL_NAME = re.compile(
@@ -150,7 +159,8 @@ def _mask_comments(source: str) -> str:
     return "".join(out)
 
 
-def _placeholder_info(source: str, require_sorry: bool) -> PlaceholderInfo:
+def _placeholder_info(source: str, require_sorry: bool,
+                      expected_header: str = "") -> PlaceholderInfo:
     original = source or ""
     masked = _mask_comments(original)
     placeholder_declarations = list(_PLACEHOLDER_DECL.finditer(masked))
@@ -179,18 +189,38 @@ def _placeholder_info(source: str, require_sorry: bool) -> PlaceholderInfo:
             "placeholder must contain exactly one top-level `def` or `abbrev`")
 
     declaration = placeholder_declarations[0]
-    marker = masked.find(BY_MARKER, declaration.end())
-    if marker < 0:
-        raise PlaceholderError(
-            "placeholder declaration must use tactic mode ending in `:= by`")
+    assignment = masked.find(":=", declaration.end())
+    if assignment < 0:
+        raise PlaceholderError("placeholder declaration must contain `:=`")
     if masked[:declaration.start()].strip():
         raise PlaceholderError("placeholder contains unrelated code before its declaration")
 
     name = declaration.group("name")
-    header = original[declaration.start():marker + len(BY_MARKER)].rstrip()
     has_sorry = _SORRY.search(masked) is not None
-    if require_sorry and not has_sorry:
-        raise PlaceholderError("initial placeholder must contain at least one `sorry`")
+    if require_sorry:
+        rhs_start = assignment + 2
+        while rhs_start < len(masked) and masked[rhs_start].isspace():
+            rhs_start += 1
+        rhs = masked[rhs_start:].strip()
+        if rhs == "sorry":
+            # In an expression-style hole, the replaceable RHS begins after `:=`.
+            header_end = assignment + 2
+        elif re.match(r"by\b", masked[rhs_start:]) and has_sorry:
+            # Preserve the historical tactic-style contract: `by` is immutable.
+            header_end = rhs_start + len("by")
+        else:
+            raise PlaceholderError(
+                "initial placeholder must use `:= sorry` or a `:= by` body "
+                "containing `sorry`")
+        header = original[declaration.start():header_end].rstrip()
+    else:
+        if expected_header and original[declaration.start():].startswith(expected_header):
+            header = expected_header
+        else:
+            # Return the candidate signature prefix so the caller can report the
+            # exact-header mismatch. A direct RHS is valid only when the original
+            # expression-style header permits it.
+            header = original[declaration.start():assignment + 2].rstrip()
     if not require_sorry and has_sorry:
         raise PlaceholderError("filled placeholder must not contain `sorry`")
     return PlaceholderInfo(header=header, name=name, source=original)
@@ -204,7 +234,8 @@ def check_filled_placeholder(source: str, expected_header: str,
                              expected_name: str) -> StructureResult:
     violations: List[str] = []
     try:
-        info = _placeholder_info(source, require_sorry=False)
+        info = _placeholder_info(
+            source, require_sorry=False, expected_header=expected_header)
     except PlaceholderError as error:
         return StructureResult(False, [str(error)])
     if info.header != expected_header:
@@ -280,12 +311,14 @@ def exploration_sorry_violations(previous_body: str,
         violations.append(
             "exploration theorem body may retain at most one unresolved `sorry`"
         )
-    if candidate_count == 1 and not re.search(
-        r"(?m)^[ \t]*sorry[ \t]*\Z", candidate.rstrip()
-    ):
+    final_hole = re.search(
+        r"(?m)^[ \t]*sorry[ \t]*\Z", candidate.rstrip())
+    expression_hole = re.search(
+        r":=\s*sorry\s*\Z", candidate.rstrip())
+    if candidate_count == 1 and not (final_hole or expression_hole):
         violations.append(
-            "the only permitted exploration `sorry` is the final standalone "
-            "tactic of the target theorem"
+            "the only permitted exploration `sorry` is the target theorem's "
+            "final tactic or direct expression body"
         )
     return violations
 

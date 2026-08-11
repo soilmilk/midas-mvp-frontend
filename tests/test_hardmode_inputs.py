@@ -120,10 +120,26 @@ try:
             "noncomputable abbrev answer : Nat := by\n  sorry\n",
             "noncomputable abbrev answer : Nat := by\n  exact 5\n",
         ),
+        "expression def": (
+            "def answer : Nat := sorry\n",
+            "def answer : Nat := 5\n",
+        ),
+        "expression abbrev": (
+            "abbrev answer : Nat := sorry\n",
+            "abbrev answer : Nat := by\n  exact 5\n",
+        ),
+        "expression noncomputable def": (
+            "  noncomputable def answer : Nat := sorry\n",
+            "  noncomputable def answer : Nat := 5\n",
+        ),
+        "expression noncomputable abbrev": (
+            "noncomputable abbrev answer : Nat := sorry\n",
+            "noncomputable abbrev answer : Nat := by\n  exact 5\n",
+        ),
     }
     for label, (initial, filled) in supported_placeholders.items():
         supported_info = extract_placeholder_info(initial)
-        expected_header = initial.split("\n", 1)[0]
+        expected_header = initial.split("sorry", 1)[0].rstrip()
         check(f"accept {label} placeholder",
               supported_info.header == expected_header and
               supported_info.name == "answer",
@@ -133,7 +149,8 @@ try:
                   filled, supported_info.header, supported_info.name).ok)
 
     malformed = {
-        "missing tactic marker": "def answer : Nat := 5\n",
+        "missing hole": "def answer : Nat := 5\n",
+        "compound expression hole": "def answer : Nat := id sorry\n",
         "no sorry": FILLED,
         "two definitions": PLACEHOLDER + "\ndef other : Nat := by\n  sorry\n",
         "lemma plus definition": "lemma helper : True := by trivial\n" + PLACEHOLDER,
@@ -170,6 +187,29 @@ try:
     check("filled placeholder with auxiliary declaration rejected",
           not check_filled_placeholder(FILLED + "\ndef other : Nat := 0\n",
                                        info.header, info.name).ok)
+
+    expression_initial = "noncomputable abbrev answer : Set Nat := sorry\n"
+    expression_info = extract_placeholder_info(expression_initial)
+    check("expression placeholder header ends at assignment",
+          expression_info.header ==
+          "noncomputable abbrev answer : Set Nat :=",
+          repr(expression_info.header))
+    check("expression placeholder accepts direct-term filling",
+          check_filled_placeholder(
+              "noncomputable abbrev answer : Set Nat := {5}\n",
+              expression_info.header, expression_info.name).ok)
+    check("expression placeholder accepts tactic filling",
+          check_filled_placeholder(
+              "noncomputable abbrev answer : Set Nat := by\n  exact {5}\n",
+              expression_info.header, expression_info.name).ok)
+    check("expression placeholder still protects exact signature",
+          not check_filled_placeholder(
+              "noncomputable abbrev answer : Set Int := {}\n",
+              expression_info.header, expression_info.name).ok)
+    check("tactic placeholder still requires its original by marker",
+          not check_filled_placeholder(
+              "def answer : Nat := 5\n",
+              info.header, info.name).ok)
 
     validator = InputValidator()
     valid_result = validator.validate(hard_problem)

@@ -187,20 +187,24 @@ Rules that matter:
 
 - `context.lean` contains the definitions the theorem needs and no imports; put imports in
   `lean_prelude`.
-- `body_initial.lean` contains exactly one tactic-mode theorem whose header ends in `:= by`.
-  The header is stored and enforced byte-for-byte on every later body.
+- `body_initial.lean` contains exactly one theorem with either a `:= sorry` expression hole
+  or a tactic body beginning with `:= by`. Its immutable header prefix is stored and enforced
+  byte-for-byte on every later body.
 - Hard Mode requires `placeholder.lean`; Easy Mode rejects it.
-- The supported placeholder is exactly one top-level tactic-mode `def` or `abbrev`,
-  optionally prefixed by `noncomputable`:
+- The supported placeholder is exactly one top-level `def` or `abbrev`, optionally prefixed
+  by `noncomputable`. Both expression-style and tactic-style holes are accepted:
 
   ```lean4
+  noncomputable abbrev answerSet : Set ℕ := sorry
+
   noncomputable def answer : ℝ := by
     sorry
   ```
 
-  Its header is preserved byte-for-byte. Imports, namespaces, auxiliary declarations, completed
-  declarations, term-style declarations, and declaration kinds other than `def` and `abbrev` are
-  rejected. A standalone `noncomputable` command is still forbidden in this file.
+  Its immutable signature prefix (through `:=`, or through `:= by` for tactic style) is
+  preserved byte-for-byte. Imports, namespaces, auxiliary or already-completed declarations,
+  and declaration kinds other than `def` and `abbrev` are rejected. A standalone
+  `noncomputable` command is still forbidden in this file.
 
 Example `config.json`:
 
