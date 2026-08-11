@@ -32,7 +32,10 @@ if REPO not in sys.path:
 from midas.reconstructor import render_source
 
 LEAN = shutil.which("lean") or os.path.expanduser("~/.elan/bin/lean")
-WORK = os.path.join(REPO, ".work")
+# Per-worker isolation (spec §1): a worker sets $MIDAS_WORK_DIR to its own scratch dir so parallel
+# fresh-backend runs in ONE checkout don't clobber each other's compile files. Default = repo .work
+# (unchanged single-run behavior, so existing tests/behaviour are byte-identical).
+WORK = os.environ.get("MIDAS_WORK_DIR") or os.path.join(REPO, ".work")
 
 # file:line:col: severity[(code)]: message   (message may continue on following lines)
 _DIAG = re.compile(

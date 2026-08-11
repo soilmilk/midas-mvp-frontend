@@ -512,6 +512,20 @@ def cmd_replay(args):
     )
 
 
+def cmd_putnambench(args):
+    """Dispatch `midas putnambench <tool> ...` to the PutnamBench modules (spec §1/§2/§3).
+    `run`/`compile-gate` propagate their exit code (0 all-ok / 2 unresolved / 1 controller error)."""
+    tool, rest = args.tool, args.rest
+    if tool in ("scan", "prepare"):
+        from midas.putnambench import prepare
+        raise SystemExit(prepare.main([f"--{tool}"] + rest))
+    if tool in ("setup", "preflight", "compile-gate"):
+        from midas.putnambench import ec2
+        raise SystemExit(ec2.main([tool] + rest))
+    from midas.putnambench import runner
+    raise SystemExit(runner.main([tool] + rest))   # init | run | status | report
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="midas", description="lemma-first Lean 4 proof-search loop")
     ap.add_argument("--runs-root", default="runs", help="directory holding run outputs (default: runs)")
@@ -560,6 +574,12 @@ def main(argv=None):
     for name in ("problem_id",): rp.add_argument(name)
     for name in ("step", "candidate", "attempt"): rp.add_argument(name, type=int)
     rp.set_defaults(fn=cmd_replay)
+
+    pb = sub.add_parser("putnambench", help="PutnamBench benchmark: prepare|scan|init|run|status|report")
+    pb.add_argument("tool", choices=["setup", "preflight", "scan", "prepare", "compile-gate",
+                                     "init", "run", "status", "report"])
+    pb.add_argument("rest", nargs=argparse.REMAINDER)
+    pb.set_defaults(fn=cmd_putnambench)
 
     args = ap.parse_args(argv)
     args.fn(args)
