@@ -95,13 +95,14 @@ cd ..
 OpenRouter's OpenAI-compatible API.
 ```bash
 # Assuming that you're still on the midas-mvp folder
-python3 -m venv .venv  # if it's a new EC2, might need to run 'sudo apt update' before that
+sudo apt update
+python3 -m venv .venv  # if it's a new EC2, it might tell you to run something before
 source .venv/bin/activate
 pip install pydantic openai
 ```
 
 
-**7. Testing the install — NO key needed.**
+**7. Testing the install (works even if you don't have a key)**
 
 ```bash
 python3 tests/run_all.py
@@ -137,7 +138,15 @@ python3 -m midas.cli status p4_n5_30
 
 ---
 
-## Adding a problem
+## Adding a problem of your own (requires knowing what Easy Mode and Hard Mode are)
+A quick example: if we were to solve IMO 2026 P4, here's the difference:
+
+Hard Mode (original): "For which real values of $\theta$ can Mulan guarantee her victory in finitely many steps, no matter how Shan-Yu plays?"
+
+Easy Mode: "Prove that the θ's for which Mulan guarantee her victory in finitely many steps are: 180◦/n, for some integer n ≥ 2."
+
+Hard Mode requires conjecturing and proving the answer.
+Easy Mode already has the answer and requires proving that it's correct.
 
 Every problem explicitly or implicitly selects a mode in `config.json`:
 
@@ -178,20 +187,24 @@ Rules that matter:
 
 - `context.lean` contains the definitions the theorem needs and no imports; put imports in
   `lean_prelude`.
-- `body_initial.lean` contains exactly one tactic-mode theorem whose header ends in `:= by`.
-  The header is stored and enforced byte-for-byte on every later body.
+- `body_initial.lean` contains exactly one theorem with either a `:= sorry` expression hole
+  or a tactic body beginning with `:= by`. Its immutable header prefix is stored and enforced
+  byte-for-byte on every later body.
 - Hard Mode requires `placeholder.lean`; Easy Mode rejects it.
-- The supported placeholder is exactly one top-level tactic-mode `def` or `abbrev`,
-  optionally prefixed by `noncomputable`:
+- The supported placeholder is exactly one top-level `def` or `abbrev`, optionally prefixed
+  by `noncomputable`. Both expression-style and tactic-style holes are accepted:
 
   ```lean4
+  noncomputable abbrev answerSet : Set ℕ := sorry
+
   noncomputable def answer : ℝ := by
     sorry
   ```
 
-  Its header is preserved byte-for-byte. Imports, namespaces, auxiliary declarations, completed
-  declarations, term-style declarations, and declaration kinds other than `def` and `abbrev` are
-  rejected. A standalone `noncomputable` command is still forbidden in this file.
+  Its immutable signature prefix (through `:=`, or through `:= by` for tactic style) is
+  preserved byte-for-byte. Imports, namespaces, auxiliary or already-completed declarations,
+  and declaration kinds other than `def` and `abbrev` are rejected. A standalone
+  `noncomputable` command is still forbidden in this file.
 
 Example `config.json`:
 
